@@ -24,7 +24,7 @@ type PendingRun = {
 };
 
 export function LabNotebook() {
-  const { isRunning, agents, orchestrator, error: experimentError, startExperiment } = useExperiment();
+  const { isRunning, agents, orchestrator, error: experimentError, startExperiment, clearError } = useExperiment();
   const [task, setTask] = useState("");
   const [mode, setMode] = useState<"single" | "orchestrator">("orchestrator");
   const [testMode, setTestMode] = useState(false);
@@ -192,8 +192,8 @@ export function LabNotebook() {
         <div className="flex-1 overflow-y-auto custom-scrollbar">
             <div className="max-w-5xl mx-auto py-24 px-8 space-y-32">
                 
-                {/* Initial Input State (Only visible when timeline is empty and not running) */}
-                {orchestrator.timeline.length === 0 && !isRunning && (
+                {/* Initial Input State (Only visible when timeline is empty, not running, and no error) */}
+                {orchestrator.timeline.length === 0 && !isRunning && !experimentError && (
                     <div className="min-h-[60vh] flex flex-col justify-center items-center space-y-12 animate-in fade-in duration-1000">
                         <div className="space-y-6 text-center max-w-lg">
                             <h1 className="text-4xl md:text-5xl font-light tracking-tight text-white">
@@ -299,6 +299,12 @@ export function LabNotebook() {
                             <p className="text-xs text-[#86868b]">
                                 Check your API keys and try again. If using Claude Opus 4.5, make sure your Anthropic API key is set.
                             </p>
+                            <button
+                                onClick={() => clearError()}
+                                className="mt-4 px-6 py-2 rounded-full text-xs font-medium tracking-widest uppercase transition-all duration-500 bg-white text-black hover:bg-[#e5e5e5] hover:scale-105"
+                            >
+                                Try Again
+                            </button>
                         </div>
                     </div>
                 )}

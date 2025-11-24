@@ -529,6 +529,8 @@ export function useExperiment() {
     // We need a way to parse the agent ID from the line if it exists.
     // The orchestrator prefixes: `[Agent {id}] `
 
+    const clearError = () => setError(null);
+
     return {
         isRunning,
         logs,
@@ -536,5 +538,6 @@ export function useExperiment() {
         orchestrator,
         error,
         startExperiment,
+        clearError,
     };
 }
