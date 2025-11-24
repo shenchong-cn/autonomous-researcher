@@ -42,7 +42,7 @@ class SingleExperimentRequest(BaseModel):
     Request body for running a single-agent experiment.
 
     This directly maps to:
-        python main.py "<task>" --mode single [--gpu GPU]
+        python main.py "<task>" --mode single [--gpu GPU] [--model MODEL]
     """
 
     task: str = Field(
@@ -64,6 +64,14 @@ class SingleExperimentRequest(BaseModel):
         ),
         examples=["T4"],
     )
+    model: str = Field(
+        "gemini-3-pro-preview",
+        description=(
+            "The LLM model to use for the experiment. "
+            "Options: 'gemini-3-pro-preview' or 'claude-opus-4-5'."
+        ),
+        examples=["gemini-3-pro-preview", "claude-opus-4-5"],
+    )
     test_mode: bool = Field(
         False,
         description="If true, runs in test mode with mock data (no LLM/GPU usage).",
@@ -76,7 +84,7 @@ class OrchestratorExperimentRequest(BaseModel):
 
     This maps to:
         python main.py "<task>" --mode orchestrator \\
-            --num-agents N --max-rounds R --max-parallel P [--gpu GPU]
+            --num-agents N --max-rounds R --max-parallel P [--gpu GPU] [--model MODEL]
     """
 
     task: str = Field(
@@ -98,6 +106,14 @@ class OrchestratorExperimentRequest(BaseModel):
             "host default (CPU-only or configured GPU)."
         ),
         examples=["A10G"],
+    )
+    model: str = Field(
+        "gemini-3-pro-preview",
+        description=(
+            "The LLM model to use for the experiment. "
+            "Options: 'gemini-3-pro-preview' or 'claude-opus-4-5'."
+        ),
+        examples=["gemini-3-pro-preview", "claude-opus-4-5"],
     )
     num_agents: int = Field(
         3,
@@ -173,6 +189,10 @@ class CredentialStatus(BaseModel):
         ...,
         description="True when GOOGLE_API_KEY is set to a non-placeholder value.",
     )
+    has_anthropic_api_key: bool = Field(
+        ...,
+        description="True when ANTHROPIC_API_KEY is set to a non-placeholder value.",
+    )
     has_modal_token: bool = Field(
         ...,
         description="True when both MODAL_TOKEN_ID and MODAL_TOKEN_SECRET are set.",
@@ -184,6 +204,9 @@ class CredentialUpdateRequest(BaseModel):
 
     google_api_key: Optional[str] = Field(
         None, description="Full Google API key from AI Studio"
+    )
+    anthropic_api_key: Optional[str] = Field(
+        None, description="Anthropic API key from https://console.anthropic.com"
     )
     modal_token_id: Optional[str] = Field(
         None, description="Modal token ID from https://modal.com/settings/tokens"
@@ -302,10 +325,12 @@ def _persist_env(key: str, value: str) -> None:
 def _credential_status() -> CredentialStatus:
     """Summarize which credentials are available."""
     has_google = _env_value_present(os.environ.get("GOOGLE_API_KEY"))
+    has_anthropic = _env_value_present(os.environ.get("ANTHROPIC_API_KEY"))
     has_modal_id = _env_value_present(os.environ.get("MODAL_TOKEN_ID"))
     has_modal_secret = _env_value_present(os.environ.get("MODAL_TOKEN_SECRET"))
     return CredentialStatus(
         has_google_api_key=has_google,
+        has_anthropic_api_key=has_anthropic,
         has_modal_token=has_modal_id and has_modal_secret,
     )
 
@@ -333,6 +358,8 @@ def _build_single_command(req: SingleExperimentRequest) -> List[str]:
         req.task,
         "--mode",
         "single",
+        "--model",
+        req.model,
     ]
     if req.gpu:
         cmd.extend(["--gpu", req.gpu])
@@ -351,6 +378,8 @@ def _build_orchestrator_command(req: OrchestratorExperimentRequest) -> List[str]
         req.task,
         "--mode",
         "orchestrator",
+        "--model",
+        req.model,
         "--num-agents",
         str(req.num_agents),
         "--max-rounds",
@@ -601,6 +630,8 @@ def update_credentials(req: CredentialUpdateRequest) -> CredentialStatus:
     try:
         if req.google_api_key and req.google_api_key.strip():
             _persist_env("GOOGLE_API_KEY", req.google_api_key.strip())
+        if req.anthropic_api_key and req.anthropic_api_key.strip():
+            _persist_env("ANTHROPIC_API_KEY", req.anthropic_api_key.strip())
         if req.modal_token_id and req.modal_token_id.strip():
             _persist_env("MODAL_TOKEN_ID", req.modal_token_id.strip())
         if req.modal_token_secret and req.modal_token_secret.strip():

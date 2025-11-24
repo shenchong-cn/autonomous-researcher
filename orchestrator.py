@@ -10,11 +10,14 @@ from typing import List, Optional, Dict, Any
 from google import genai
 from google.genai import types
 
+import anthropic
+
 from logger import print_panel, print_status, log_step, logger
 
 
 # Global orchestrator state
 _default_gpu: Optional[str] = None
+_default_model: str = "gemini-3-pro-preview"
 _experiment_counter: int = 0
 
 # Regex for stripping ANSI escape sequences (Rich colour codes, etc.).
@@ -215,7 +218,7 @@ def run_researcher(hypothesis: str, gpu: Optional[str] = None, test_mode: bool =
     Tool wrapper that launches a single-researcher agent experiment in a separate process.
 
     This function:
-    - Spawns: `python main.py "<hypothesis>" --mode single [--gpu GPU]`
+    - Spawns: `python main.py "<hypothesis>" --mode single [--gpu GPU] [--model MODEL]`
     - Streams all logs from the underlying agent back to the user's terminal
       in real time (so all thinking/tool calls are visible).
     - Captures the full transcript (stdout + stderr) so the orchestrator
@@ -238,7 +241,7 @@ def run_researcher(hypothesis: str, gpu: Optional[str] = None, test_mode: bool =
                 "llm_transcript": str,
             }
     """
-    global _experiment_counter, _default_gpu
+    global _experiment_counter, _default_gpu, _default_model
 
     _experiment_counter += 1
     experiment_id = _experiment_counter
@@ -276,6 +279,8 @@ def run_researcher(hypothesis: str, gpu: Optional[str] = None, test_mode: bool =
         hypothesis,
         "--mode",
         "single",
+        "--model",
+        _default_model,
     ]
     if assigned_gpu:
         cmd.extend(["--gpu", assigned_gpu])
@@ -400,9 +405,10 @@ def run_orchestrator_loop(
     default_gpu: Optional[str] = None,
     max_parallel_experiments: int = 2,
     test_mode: bool = False,
+    model: str = "gemini-3-pro-preview",
 ) -> None:
     """
-    Main orchestrator loop using Gemini 3 Pro with thinking + manual tool calling.
+    Main orchestrator loop using Gemini 3 Pro or Claude Opus 4.5 with thinking + manual tool calling.
 
     Args:
         research_task: High-level research question or task to investigate.
@@ -412,9 +418,11 @@ def run_orchestrator_loop(
         max_parallel_experiments: Maximum number of experiments to run in parallel
                                   in a single wave of tool calls.
         test_mode: If True, runs in test mode with mock data.
+        model: LLM model to use ("gemini-3-pro-preview" or "claude-opus-4-5").
     """
-    global _default_gpu
+    global _default_gpu, _default_model
     _default_gpu = default_gpu
+    _default_model = model
 
     print_panel(
         f"Research Task:\n{research_task}",
@@ -466,7 +474,7 @@ def run_orchestrator_loop(
         
         with ThreadPoolExecutor(max_workers=max_parallel_experiments) as executor:
             futures = []
-            for i, hyp in enumerate(mock_hypotheses):
+            for hyp in mock_hypotheses:
                 futures.append(executor.submit(run_researcher, hyp, default_gpu, True))
             
             for future in futures:
@@ -511,6 +519,379 @@ def run_orchestrator_loop(
         emit_event("ORCH_PAPER", {"content": final_paper})
         return
 
+    print_status(f"Model: {model}", "info")
+
+    # Branch based on model selection
+    if model == "claude-opus-4-5":
+        _run_claude_orchestrator_loop(
+            research_task=research_task,
+            num_initial_agents=num_initial_agents,
+            max_rounds=max_rounds,
+            default_gpu=default_gpu,
+            max_parallel_experiments=max_parallel_experiments,
+        )
+    else:
+        _run_gemini_orchestrator_loop(
+            research_task=research_task,
+            num_initial_agents=num_initial_agents,
+            max_rounds=max_rounds,
+            default_gpu=default_gpu,
+            max_parallel_experiments=max_parallel_experiments,
+        )
+
+
+def _build_claude_orchestrator_tool_definition() -> dict:
+    """Build the tool definition for Claude's orchestrator."""
+    return {
+        "name": "run_researcher",
+        "description": (
+            "Launches an independent single-researcher agent (in its own process) that will "
+            "interpret a hypothesis, plan experiments, run Python code in a Modal sandbox, "
+            "iteratively refine its experiments, and produce a final report explaining "
+            "how it tested the hypothesis and what it found. Returns a JSON object with "
+            "experiment_id, hypothesis, gpu, exit_code, and transcript."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "hypothesis": {
+                    "type": "string",
+                    "description": "The experimental hypothesis to pass to the single agent."
+                },
+                "gpu": {
+                    "type": "string",
+                    "description": "Optional GPU string ('T4', 'A10G', 'A100', 'any'). If omitted, uses default."
+                }
+            },
+            "required": ["hypothesis"]
+        }
+    }
+
+
+def _run_claude_orchestrator_loop(
+    research_task: str,
+    num_initial_agents: int,
+    max_rounds: int,
+    default_gpu: Optional[str],
+    max_parallel_experiments: int,
+) -> None:
+    """Run the orchestrator loop using Claude Opus 4.5 with extended thinking."""
+    print_status("Claude extended thinking enabled", "info")
+
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    system_prompt = _build_orchestrator_system_prompt(
+        num_initial_agents=num_initial_agents,
+        max_rounds=max_rounds,
+        default_gpu_hint=default_gpu,
+        max_parallel_experiments=max_parallel_experiments,
+    )
+    tool_def = _build_claude_orchestrator_tool_definition()
+
+    # Initial conversation
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                "High-level research task:\n"
+                f"{research_task}\n\n"
+                "Begin by decomposing this into concrete hypotheses and planning "
+                "which ones require empirical validation. When appropriate, "
+                "call run_researcher for hypotheses that need experiments."
+            )
+        }
+    ]
+
+    all_experiments: List[Dict[str, Any]] = []
+    max_steps = max(8, max_rounds * 3)
+
+    for step in range(1, max_steps + 1):
+        print_status(f"Orchestrator step {step}...", "dim")
+
+        try:
+            # Track thinking blocks with signatures for proper history
+            thinking_blocks = []  # List of {"thinking": str, "signature": str}
+            text_content = []
+            tool_use_blocks = []
+
+            with client.messages.stream(
+                model="claude-opus-4-5-20251101",
+                max_tokens=16000,
+                thinking={
+                    "type": "enabled",
+                    "budget_tokens": 10000
+                },
+                system=system_prompt,
+                tools=[tool_def],
+                messages=messages,
+            ) as stream:
+                for event in stream:
+                    if hasattr(event, 'type'):
+                        if event.type == 'content_block_start':
+                            if hasattr(event, 'content_block'):
+                                block = event.content_block
+                                if hasattr(block, 'type'):
+                                    if block.type == 'thinking':
+                                        thinking_blocks.append({"thinking": "", "signature": None})
+                                    elif block.type == 'text':
+                                        text_content.append("")
+                                    elif block.type == 'tool_use':
+                                        tool_use_blocks.append({
+                                            "id": block.id,
+                                            "name": block.name,
+                                            "input": ""
+                                        })
+                        elif event.type == 'content_block_delta':
+                            if hasattr(event, 'delta'):
+                                delta = event.delta
+                                if hasattr(delta, 'type'):
+                                    if delta.type == 'thinking_delta' and hasattr(delta, 'thinking'):
+                                        if thinking_blocks:
+                                            thinking_blocks[-1]["thinking"] += delta.thinking
+                                            emit_event("ORCH_THOUGHT_STREAM", {"chunk": delta.thinking})
+                                    elif delta.type == 'text_delta' and hasattr(delta, 'text'):
+                                        if text_content:
+                                            text_content[-1] += delta.text
+                                    elif delta.type == 'input_json_delta' and hasattr(delta, 'partial_json'):
+                                        if tool_use_blocks:
+                                            tool_use_blocks[-1]["input"] += delta.partial_json
+                                    elif delta.type == 'signature_delta' and hasattr(delta, 'signature'):
+                                        # Capture signature for thinking blocks
+                                        if thinking_blocks:
+                                            if thinking_blocks[-1]["signature"] is None:
+                                                thinking_blocks[-1]["signature"] = ""
+                                            thinking_blocks[-1]["signature"] += delta.signature
+
+        except Exception as e:
+            print_status(f"Orchestrator API Error: {e}", "error")
+            logger.error(f"Orchestrator API Error: {e}")
+            break
+
+        # Process thinking content
+        thinking_texts = [tb["thinking"] for tb in thinking_blocks if tb["thinking"]]
+        if thinking_texts:
+            joined_thinking = "\n\n".join(thinking_texts)
+            if joined_thinking:
+                print_panel(joined_thinking, "Orchestrator Thinking", "thought")
+                log_step("ORCH_THOUGHT", joined_thinking)
+
+        # Process text content
+        if text_content:
+            joined_text = "\n\n".join(t for t in text_content if t)
+            if joined_text:
+                print_panel(joined_text, "Orchestrator Message", "info")
+                log_step("ORCH_MODEL", joined_text)
+
+        # Check for completion
+        combined_text = "\n".join(thinking_texts + text_content)
+        if "[DONE]" in combined_text:
+            if text_content:
+                final_content = "\n\n".join(t for t in text_content if t)
+                display_content = final_content.replace("[DONE]", "").strip()
+                if display_content:
+                    print_panel(display_content, "Final Paper", "bold green")
+                    log_step("ORCH_FINAL", "Final paper generated (in loop).")
+                    emit_event("ORCH_PAPER", {"content": display_content})
+            print_status("Orchestrator signaled completion.", "success")
+            return
+
+        # Build assistant message for history - include signature for thinking blocks
+        assistant_content = []
+        for tb in thinking_blocks:
+            if tb["thinking"]:
+                thinking_block = {"type": "thinking", "thinking": tb["thinking"]}
+                if tb["signature"]:
+                    thinking_block["signature"] = tb["signature"]
+                assistant_content.append(thinking_block)
+        for t in text_content:
+            if t:
+                assistant_content.append({"type": "text", "text": t})
+
+        # Process tool calls
+        if not tool_use_blocks:
+            if assistant_content:
+                messages.append({"role": "assistant", "content": assistant_content})
+            print_status(
+                "Orchestrator: no tool calls in this step; assuming research is complete.",
+                "info",
+            )
+            break
+
+        # Execute tool calls
+        tool_results = []
+
+        def _execute_single_call(tool_block):
+            fn_name = tool_block["name"]
+            try:
+                fn_args = json.loads(tool_block["input"]) if tool_block["input"] else {}
+            except json.JSONDecodeError:
+                fn_args = {}
+
+            print_panel(
+                f"{fn_name}({json.dumps(fn_args, indent=2)})",
+                "Orchestrator Tool Call",
+                "code",
+            )
+            log_step("ORCH_TOOL_CALL", f"{fn_name}({fn_args})")
+            emit_event("ORCH_TOOL", {"tool": fn_name, "args": fn_args})
+
+            if fn_name == "run_researcher":
+                return run_researcher(**fn_args)
+            else:
+                return {
+                    "error": (
+                        f"Unsupported tool '{fn_name}'. "
+                        "Only 'run_researcher' is available."
+                    )
+                }
+
+        max_workers = max(1, min(max_parallel_experiments, len(tool_use_blocks)))
+        print_status(
+            f"Launching {len(tool_use_blocks)} experiment(s) "
+            f"with up to {max_workers} in parallel...",
+            "info",
+        )
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_execute_single_call, tb) for tb in tool_use_blocks]
+
+            for future, tool_block in zip(futures, tool_use_blocks):
+                result = future.result()
+
+                # Prepare display result
+                display_result = result
+                if isinstance(result, dict):
+                    display_result = dict(result)
+                    transcript = display_result.get("transcript", "")
+                    if isinstance(transcript, str) and len(transcript) > 4000:
+                        display_result["transcript"] = (
+                            transcript[:4000]
+                            + "\n...[TRANSCRIPT TRUNCATED IN VIEW; "
+                            "FULL TEXT PASSED BACK TO MODEL]..."
+                        )
+
+                print_panel(
+                    json.dumps(display_result, indent=2, ensure_ascii=False),
+                    "Orchestrator Tool Result",
+                    "result",
+                )
+                log_step("ORCH_TOOL_RESULT", "run_researcher completed")
+
+                # Add tool_use to assistant content
+                fn_name = tool_block["name"]
+                try:
+                    fn_args = json.loads(tool_block["input"]) if tool_block["input"] else {}
+                except json.JSONDecodeError:
+                    fn_args = {}
+
+                assistant_content.append({
+                    "type": "tool_use",
+                    "id": tool_block["id"],
+                    "name": fn_name,
+                    "input": fn_args
+                })
+
+                llm_result = _build_llm_experiment_result(result)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tool_block["id"],
+                    "content": json.dumps(llm_result)
+                })
+
+                if isinstance(result, dict) and "experiment_id" in result:
+                    all_experiments.append(result)
+
+        # Add assistant message and tool results to history
+        messages.append({"role": "assistant", "content": assistant_content})
+        messages.append({"role": "user", "content": tool_results})
+
+        # Show experiment summary
+        if all_experiments:
+            summary_lines: List[str] = []
+            for exp in all_experiments:
+                hyp_snippet = (exp.get("hypothesis", "") or "").replace("\n", " ")
+                if len(hyp_snippet) > 80:
+                    hyp_snippet = hyp_snippet[:77] + "..."
+                summary_lines.append(
+                    f"Exp {exp.get('experiment_id')} | "
+                    f"GPU={exp.get('gpu') or 'CPU'} | "
+                    f"exit={exp.get('exit_code')} | "
+                    f"{hyp_snippet}"
+                )
+
+            print_panel(
+                "\n".join(summary_lines),
+                "Orchestrator: Experiments So Far",
+                "dim",
+            )
+            log_step("ORCH_SUMMARY", f"{len(all_experiments)} experiments run so far")
+
+    # Safety net: request final paper
+    print_status(
+        "Orchestrator loop ended without explicit [DONE]. Requesting final paper...",
+        "bold yellow",
+    )
+    messages.append({
+        "role": "user",
+        "content": (
+            "Using everything above (including all transcripts and notes), "
+            "write the final Arxiv-style paper as specified in the system prompt. "
+            "When you are finished, end with a line containing only [DONE]."
+        )
+    })
+
+    try:
+        final_thinking = []
+        final_text = []
+
+        with client.messages.stream(
+            model="claude-opus-4-5-20251101",
+            max_tokens=16000,
+            thinking={
+                "type": "enabled",
+                "budget_tokens": 10000
+            },
+            system=system_prompt,
+            messages=messages,
+        ) as stream:
+            for event in stream:
+                if hasattr(event, 'type'):
+                    if event.type == 'content_block_start':
+                        if hasattr(event, 'content_block'):
+                            block = event.content_block
+                            if hasattr(block, 'type'):
+                                if block.type == 'thinking':
+                                    final_thinking.append("")
+                                elif block.type == 'text':
+                                    final_text.append("")
+                    elif event.type == 'content_block_delta':
+                        if hasattr(event, 'delta'):
+                            delta = event.delta
+                            if hasattr(delta, 'type'):
+                                if delta.type == 'thinking_delta' and hasattr(delta, 'thinking'):
+                                    if final_thinking:
+                                        final_thinking[-1] += delta.thinking
+                                        emit_event("ORCH_THOUGHT_STREAM", {"chunk": delta.thinking})
+                                elif delta.type == 'text_delta' and hasattr(delta, 'text'):
+                                    if final_text:
+                                        final_text[-1] += delta.text
+
+        final_paper = "\n\n".join(t for t in final_text if t)
+        print_panel(final_paper, "Final Paper", "bold green")
+        log_step("ORCH_FINAL", "Final paper generated.")
+        emit_event("ORCH_PAPER", {"content": final_paper})
+    except Exception as e:
+        print_status(f"Failed to generate final paper: {e}", "error")
+        logger.error(f"Failed to generate final paper: {e}")
+
+
+def _run_gemini_orchestrator_loop(
+    research_task: str,
+    num_initial_agents: int,
+    max_rounds: int,
+    default_gpu: Optional[str],
+    max_parallel_experiments: int,
+) -> None:
+    """Run the orchestrator loop using Gemini 3 Pro with thinking mode."""
     print_status("Gemini thinking: HIGH (thought summaries visible)", "info")
 
     client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])

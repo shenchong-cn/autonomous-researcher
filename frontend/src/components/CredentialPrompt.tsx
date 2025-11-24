@@ -4,6 +4,7 @@ import { ExternalLink, KeyRound, Loader2, ShieldCheck, Sparkles, X } from "lucid
 
 export type CredentialFormState = {
     googleApiKey: string;
+    anthropicApiKey: string;
     modalTokenId: string;
     modalTokenSecret: string;
 };
@@ -11,6 +12,7 @@ export type CredentialFormState = {
 type CredentialPromptProps = {
     open: boolean;
     status: CredentialStatus | null;
+    selectedModel: "gemini-3-pro-preview" | "claude-opus-4-5";
     form: CredentialFormState;
     onChange: (field: keyof CredentialFormState, value: string) => void;
     onSubmit: () => void;
@@ -22,6 +24,7 @@ type CredentialPromptProps = {
 export function CredentialPrompt({
     open,
     status,
+    selectedModel,
     form,
     onChange,
     onSubmit,
@@ -30,24 +33,38 @@ export function CredentialPrompt({
     error,
 }: CredentialPromptProps) {
     const googleReady = !!status?.hasGoogleApiKey;
+    const anthropicReady = !!status?.hasAnthropicApiKey;
     const modalReady = !!status?.hasModalToken;
+
+    // Determine which key is needed based on selected model
+    const needsGoogleKey = selectedModel === "gemini-3-pro-preview";
+    const needsAnthropicKey = selectedModel === "claude-opus-4-5";
+
+    const requiredKeyName = needsGoogleKey ? "Google API key" : "Anthropic API key";
+    const hasRequiredKey = needsGoogleKey ? googleReady : anthropicReady;
+
     const readinessCopy =
-        googleReady && modalReady
+        hasRequiredKey && modalReady
             ? "All set — keys already saved locally."
             : `Needed: ${[
-                  googleReady ? null : "Google API key",
+                  !hasRequiredKey ? requiredKeyName : null,
                   modalReady ? null : "Modal token (id + secret)",
               ]
                   .filter(Boolean)
                   .join(" + ")}`;
 
-    const missingGoogle = !googleReady;
-    const missingModal = !modalReady;
     const googleProvided = !!form.googleApiKey.trim();
+    const anthropicProvided = !!form.anthropicApiKey.trim();
     const modalProvided = !!form.modalTokenId.trim() && !!form.modalTokenSecret.trim();
 
+    // Check if the required key for the selected model is available or provided
+    const hasRequiredLLMKey = needsGoogleKey
+        ? (googleReady || googleProvided)
+        : (anthropicReady || anthropicProvided);
+    const hasModalCredentials = modalReady || modalProvided;
+
     const disableSubmit =
-        isSaving || (missingGoogle && !googleProvided) || (missingModal && !modalProvided);
+        isSaving || !hasRequiredLLMKey || !hasModalCredentials;
 
     return (
         <AnimatePresence>
@@ -81,7 +98,7 @@ export function CredentialPrompt({
                                         Add your API keys to launch the run
                                     </h2>
                                     <p className="text-sm text-white/60 max-w-2xl">
-                                        We need a Google API key from <span className="text-white">AI Studio</span> and a Modal token pair to spin up research sandboxes. Keys are stored locally in your <code className="px-2 py-1 rounded bg-white/5 text-[11px]">.env</code>.
+                                        We need at least one LLM key (Google for Gemini or Anthropic for Claude) and a Modal token pair to spin up research sandboxes. Keys are stored locally in your <code className="px-2 py-1 rounded bg-white/5 text-[11px]">.env</code>.
                                     </p>
                                 </div>
                                 <button
@@ -96,11 +113,11 @@ export function CredentialPrompt({
                             <div className="grid gap-6 md:grid-cols-[1.1fr_1.2fr]">
                                 <div className="space-y-4 rounded-xl border border-white/10 bg-white/5 p-5">
                                     <div className="flex items-center gap-3">
-                                        <ShieldCheck className={`h-5 w-5 ${googleReady ? "text-emerald-400" : "text-amber-300"}`} />
+                                        <ShieldCheck className={`h-5 w-5 ${hasRequiredKey && modalReady ? "text-emerald-400" : "text-amber-300"}`} />
                                         <div className="flex-1">
                                             <p className="text-sm font-medium text-white">Credentials status</p>
                                             <p className="text-xs text-white/60">
-                                                {googleReady && modalReady
+                                                {hasRequiredKey && modalReady
                                                     ? "Ready to launch."
                                                     : "Add the missing keys to continue."}
                                             </p>
@@ -108,30 +125,49 @@ export function CredentialPrompt({
                                     </div>
 
                                     <div className="flex flex-col gap-3">
-                                        <StatusPill label="Google API key (Gemini)" ok={googleReady} />
-                                        <StatusPill label="Modal token (compute sandbox)" ok={modalReady} />
+                                        <StatusPill
+                                            label="Google API key (Gemini)"
+                                            ok={googleReady}
+                                            required={needsGoogleKey}
+                                        />
+                                        <StatusPill
+                                            label="Anthropic API key (Claude)"
+                                            ok={anthropicReady}
+                                            required={needsAnthropicKey}
+                                        />
+                                        <StatusPill label="Modal token (compute sandbox)" ok={modalReady} required={true} />
                                     </div>
 
-                                    <div className="grid grid-cols-2 gap-3 pt-1">
+                                    <div className="grid grid-cols-3 gap-3 pt-1">
                                         <a
                                             href="https://aistudio.google.com/app/apikey"
                                             target="_blank"
                                             rel="noreferrer"
-                                            className="group inline-flex items-center justify-center gap-2 rounded-lg border border-white/15 bg-gradient-to-r from-white/5 to-white/0 px-4 py-3 text-sm font-medium text-white transition hover:border-white/30 hover:from-white/10"
+                                            className="group inline-flex items-center justify-center gap-2 rounded-lg border border-white/15 bg-gradient-to-r from-white/5 to-white/0 px-3 py-3 text-xs font-medium text-white transition hover:border-white/30 hover:from-white/10"
                                         >
                                             <Sparkles className="h-4 w-4 text-amber-300" />
-                                            Get Google key
-                                            <ExternalLink className="h-4 w-4 text-white/50 group-hover:text-white" />
+                                            Google key
+                                            <ExternalLink className="h-3 w-3 text-white/50 group-hover:text-white" />
+                                        </a>
+                                        <a
+                                            href="https://console.anthropic.com/settings/keys"
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="group inline-flex items-center justify-center gap-2 rounded-lg border border-white/15 bg-gradient-to-r from-white/5 to-white/0 px-3 py-3 text-xs font-medium text-white transition hover:border-white/30 hover:from-white/10"
+                                        >
+                                            <Sparkles className="h-4 w-4 text-purple-300" />
+                                            Anthropic key
+                                            <ExternalLink className="h-3 w-3 text-white/50 group-hover:text-white" />
                                         </a>
                                         <a
                                             href="https://modal.com/account/tokens"
                                             target="_blank"
                                             rel="noreferrer"
-                                            className="group inline-flex items-center justify-center gap-2 rounded-lg border border-white/15 bg-gradient-to-r from-white/5 to-white/0 px-4 py-3 text-sm font-medium text-white transition hover:border-white/30 hover:from-white/10"
+                                            className="group inline-flex items-center justify-center gap-2 rounded-lg border border-white/15 bg-gradient-to-r from-white/5 to-white/0 px-3 py-3 text-xs font-medium text-white transition hover:border-white/30 hover:from-white/10"
                                         >
                                             <KeyRound className="h-4 w-4 text-sky-300" />
-                                            Open Modal tokens
-                                            <ExternalLink className="h-4 w-4 text-white/50 group-hover:text-white" />
+                                            Modal tokens
+                                            <ExternalLink className="h-3 w-3 text-white/50 group-hover:text-white" />
                                         </a>
                                     </div>
                                 </div>
@@ -142,8 +178,16 @@ export function CredentialPrompt({
                                         placeholder="Paste your AI Studio key"
                                         value={form.googleApiKey}
                                         onChange={(value) => onChange("googleApiKey", value)}
-                                        status={googleReady ? "ok" : "missing"}
-                                        helper="Used for Gemini calls (stored locally)."
+                                        status={googleReady ? "ok" : needsGoogleKey ? "missing" : "optional"}
+                                        helper="Used for Gemini 3 Pro (stored locally)."
+                                    />
+                                    <Field
+                                        label="Anthropic API key"
+                                        placeholder="Paste your Anthropic key"
+                                        value={form.anthropicApiKey}
+                                        onChange={(value) => onChange("anthropicApiKey", value)}
+                                        status={anthropicReady ? "ok" : needsAnthropicKey ? "missing" : "optional"}
+                                        helper="Used for Claude Opus 4.5 (stored locally)."
                                     />
                                     <Field
                                         label="Modal token ID"
@@ -201,25 +245,35 @@ export function CredentialPrompt({
 type StatusPillProps = {
     label: string;
     ok: boolean;
+    required?: boolean;
 };
 
-function StatusPill({ label, ok }: StatusPillProps) {
+function StatusPill({ label, ok, required = true }: StatusPillProps) {
+    // If not required and not ok, show as "optional" (gray/neutral)
+    const isOptional = !required && !ok;
+
     return (
-        <div className="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2">
+        <div className={`flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-3 py-2 ${isOptional ? "opacity-50" : ""}`}>
             <span className="text-sm text-white/80">{label}</span>
             <span
                 className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-semibold ${
-                    ok ? "bg-emerald-500/15 text-emerald-200" : "bg-amber-500/10 text-amber-200"
+                    ok
+                        ? "bg-emerald-500/15 text-emerald-200"
+                        : isOptional
+                        ? "bg-white/5 text-white/40"
+                        : "bg-amber-500/10 text-amber-200"
                 }`}
             >
                 <div
                     className={`h-2 w-2 rounded-full ${
                         ok
                             ? "bg-emerald-400 shadow-[0_0_0_4px_rgba(52,211,153,0.2)]"
+                            : isOptional
+                            ? "bg-white/30"
                             : "bg-amber-300 shadow-[0_0_0_4px_rgba(251,191,36,0.25)]"
                     }`}
                 />
-                {ok ? "Ready" : "Missing"}
+                {ok ? "Ready" : isOptional ? "Optional" : "Missing"}
             </span>
         </div>
     );
@@ -230,17 +284,20 @@ type FieldProps = {
     placeholder: string;
     value: string;
     onChange: (value: string) => void;
-    status: "ok" | "missing";
+    status: "ok" | "missing" | "optional";
     helper?: string;
 };
 
 function Field({ label, placeholder, value, onChange, status, helper }: FieldProps) {
+    const statusText = status === "ok" ? "Optional (already set)" : status === "optional" ? "Optional" : "Required";
+    const statusColor = status === "ok" ? "text-emerald-300" : status === "optional" ? "text-blue-300" : "text-amber-200";
+
     return (
         <label className="block space-y-2">
             <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-white">{label}</span>
-                <span className={`text-[11px] uppercase tracking-[0.18em] ${status === "ok" ? "text-emerald-300" : "text-amber-200"}`}>
-                    {status === "ok" ? "Optional (already set)" : "Required"}
+                <span className={`text-[11px] uppercase tracking-[0.18em] ${statusColor}`}>
+                    {statusText}
                 </span>
             </div>
             <input

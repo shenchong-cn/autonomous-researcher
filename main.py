@@ -64,6 +64,16 @@ def main():
         action="store_true",
         help="Run in test mode with mock data (no LLM/GPU usage).",
     )
+    parser.add_argument(
+        "--model",
+        type=str,
+        choices=["gemini-3-pro-preview", "claude-opus-4-5"],
+        default="gemini-3-pro-preview",
+        help=(
+            "LLM model to use: "
+            "'gemini-3-pro-preview' (default) or 'claude-opus-4-5'."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -76,7 +86,7 @@ def main():
             import agent as agent_module
 
             agent_module._selected_gpu = args.gpu
-            run_experiment_loop(args.task, test_mode=args.test_mode)
+            run_experiment_loop(args.task, test_mode=args.test_mode, model=args.model)
         except KeyboardInterrupt:
             print_status("\nExperiment interrupted by user.", "bold red")
             sys.exit(0)
@@ -97,6 +107,7 @@ def main():
                 default_gpu=args.gpu,
                 max_parallel_experiments=args.max_parallel,
                 test_mode=args.test_mode,
+                model=args.model,
             )
         except KeyboardInterrupt:
             print_status("\nOrchestrated experiment interrupted by user.", "bold red")

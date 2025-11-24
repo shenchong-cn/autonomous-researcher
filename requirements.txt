@@ -1,4 +1,5 @@
 google-genai
+anthropic
 modal
 python-dotenv
 rich

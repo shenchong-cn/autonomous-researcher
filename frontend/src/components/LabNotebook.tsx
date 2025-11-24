@@ -15,6 +15,7 @@ type PendingRun = {
   config: {
     task: string;
     gpu?: string;
+    model?: string;
     num_agents?: number;
     max_rounds?: number;
     max_parallel?: number;
@@ -32,9 +33,11 @@ export function LabNotebook() {
   const [credentialStatus, setCredentialStatus] = useState<CredentialStatus | null>(null);
   const [credentialForm, setCredentialForm] = useState<CredentialFormState>({
     googleApiKey: "",
+    anthropicApiKey: "",
     modalTokenId: "",
     modalTokenSecret: "",
   });
+  const [selectedModel, setSelectedModel] = useState<"gemini-3-pro-preview" | "claude-opus-4-5">("gemini-3-pro-preview");
   const [showCredentialPrompt, setShowCredentialPrompt] = useState(false);
   const [pendingRun, setPendingRun] = useState<PendingRun | null>(null);
   const [isCheckingCredentials, setIsCheckingCredentials] = useState(false);
@@ -82,6 +85,7 @@ export function LabNotebook() {
     const config = {
       task,
       gpu: "any",
+      model: selectedModel,
       num_agents: 3,
       max_rounds: 3,
       max_parallel: 2,
@@ -96,8 +100,12 @@ export function LabNotebook() {
       const status = await fetchCredentialStatus();
       setCredentialStatus(status);
 
-      const missingKeys = !status.hasGoogleApiKey || !status.hasModalToken;
-      if (missingKeys) {
+      // Check if the required key for the selected model is available
+      const needsGoogleKey = selectedModel === "gemini-3-pro-preview" && !status.hasGoogleApiKey;
+      const needsAnthropicKey = selectedModel === "claude-opus-4-5" && !status.hasAnthropicApiKey;
+      const needsModalToken = !status.hasModalToken;
+
+      if (needsGoogleKey || needsAnthropicKey || needsModalToken) {
         setPendingRun({ mode, config });
         setShowCredentialPrompt(true);
         return;
@@ -122,21 +130,28 @@ export function LabNotebook() {
     try {
       const status = await saveCredentials({
         googleApiKey: credentialForm.googleApiKey || undefined,
+        anthropicApiKey: credentialForm.anthropicApiKey || undefined,
         modalTokenId: credentialForm.modalTokenId || undefined,
         modalTokenSecret: credentialForm.modalTokenSecret || undefined,
       });
       setCredentialStatus(status);
 
-      if (status.hasGoogleApiKey && status.hasModalToken) {
+      // Check if we have the required key for the selected model
+      const hasRequiredLLMKey = selectedModel === "gemini-3-pro-preview"
+        ? status.hasGoogleApiKey
+        : status.hasAnthropicApiKey;
+
+      if (hasRequiredLLMKey && status.hasModalToken) {
         setShowCredentialPrompt(false);
-        setCredentialForm({ googleApiKey: "", modalTokenId: "", modalTokenSecret: "" });
+        setCredentialForm({ googleApiKey: "", anthropicApiKey: "", modalTokenId: "", modalTokenSecret: "" });
         const nextRun = pendingRun;
         setPendingRun(null);
         if (nextRun) {
           startExperiment(nextRun.mode, nextRun.config);
         }
       } else {
-        setCredentialPromptError("We still need both the Google key and Modal token to start a run.");
+        const modelName = selectedModel === "gemini-3-pro-preview" ? "Google" : "Anthropic";
+        setCredentialPromptError(`We still need the ${modelName} API key and Modal token to start a run with the selected model.`);
       }
     } catch (err) {
       setCredentialPromptError(err instanceof Error ? err.message : "Unable to save credentials.");
@@ -222,6 +237,15 @@ export function LabNotebook() {
                                     >
                                         <option value="single">Single Agent</option>
                                         <option value="orchestrator">Agent Swarm</option>
+                                    </select>
+                                    <div className="h-4 w-[1px] bg-[#333]" />
+                                    <select
+                                        value={selectedModel}
+                                        onChange={(e) => setSelectedModel(e.target.value as "gemini-3-pro-preview" | "claude-opus-4-5")}
+                                        className="bg-transparent text-[#86868b] text-xs font-medium focus:outline-none cursor-pointer hover:text-white transition-colors"
+                                    >
+                                        <option value="gemini-3-pro-preview">Gemini 3 Pro</option>
+                                        <option value="claude-opus-4-5">Claude Opus 4.5</option>
                                     </select>
                                 </div>
 
@@ -377,6 +401,7 @@ export function LabNotebook() {
       <CredentialPrompt
         open={showCredentialPrompt}
         status={credentialStatus}
+        selectedModel={selectedModel}
         form={credentialForm}
         onChange={handleCredentialFieldChange}
         onSubmit={handleSaveCredentials}

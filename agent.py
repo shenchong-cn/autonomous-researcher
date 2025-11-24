@@ -1,10 +1,13 @@
 import os
 import sys
 import threading
+import json
 from typing import Optional, List
 
 from google import genai
 from google.genai import types
+
+import anthropic
 
 from logger import print_panel, print_status, log_step, logger
 
@@ -218,6 +221,28 @@ def execute_in_sandbox(code: str):
         return f"Sandbox Execution Failed: {str(e)}"
 
 
+def _build_claude_tool_definition() -> dict:
+    """Build the tool definition for Claude's format."""
+    return {
+        "name": "execute_in_sandbox",
+        "description": (
+            "Executes Python code inside a persistent Modal Sandbox. "
+            "The sandbox has numpy, pandas, torch, scikit-learn, and matplotlib installed. "
+            "Returns the exit code, stdout, and stderr from the execution."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "The Python code to execute in the sandbox."
+                }
+            },
+            "required": ["code"]
+        }
+    }
+
+
 def _build_system_prompt(gpu_hint: str) -> str:
     """System-level instructions for the Gemini agent."""
     return f"""You are an autonomous research scientist.
@@ -242,14 +267,15 @@ Working loop:
 """
 
 
-def run_experiment_loop(hypothesis: str, test_mode: bool = False):
-    """Main agent loop using Gemini 3 Pro with thinking + manual tool calling."""
+def run_experiment_loop(hypothesis: str, test_mode: bool = False, model: str = "gemini-3-pro-preview"):
+    """Main agent loop using Gemini 3 Pro or Claude Opus 4.5 with thinking + manual tool calling."""
     gpu_hint = _selected_gpu or "CPU"
 
     print_panel(f"Hypothesis: {hypothesis}", "Starting Experiment", "bold green")
     log_step("START", f"Hypothesis: {hypothesis}")
     print_status(f"Sandbox GPU request: {gpu_hint}", "info")
-    
+    print_status(f"Model: {model}", "info")
+
     if test_mode:
         print_status("TEST MODE ENABLED: Using mock data and skipping LLM calls.", "bold yellow")
         import time
@@ -321,6 +347,239 @@ def run_experiment_loop(hypothesis: str, test_mode: bool = False):
         print_panel(final_report, "Final Report", "bold green")
         return
 
+    # Branch based on model selection
+    if model == "claude-opus-4-5":
+        _run_claude_experiment_loop(hypothesis, gpu_hint)
+    else:
+        _run_gemini_experiment_loop(hypothesis, gpu_hint)
+
+
+def _run_claude_experiment_loop(hypothesis: str, gpu_hint: str):
+    """Run the experiment loop using Claude Opus 4.5 with extended thinking."""
+    print_status("Claude extended thinking enabled", "info")
+
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    system_prompt = _build_system_prompt(gpu_hint)
+    tool_def = _build_claude_tool_definition()
+
+    # Initial conversation with hypothesis
+    messages = [
+        {"role": "user", "content": f"Hypothesis: {hypothesis}"}
+    ]
+
+    max_steps = 10
+
+    for step in range(1, max_steps + 1):
+        print_status(f"Step {step}...", "dim")
+
+        try:
+            # Use streaming for Claude with extended thinking enabled
+            # We need to track thinking blocks with their signatures for proper history
+            thinking_blocks = []  # List of {"thinking": str, "signature": str}
+            text_content = []
+            tool_use_blocks = []
+
+            with client.messages.stream(
+                model="claude-opus-4-5-20251101",
+                max_tokens=16000,
+                thinking={
+                    "type": "enabled",
+                    "budget_tokens": 10000
+                },
+                system=system_prompt,
+                tools=[tool_def],
+                messages=messages,
+            ) as stream:
+                for event in stream:
+                    if hasattr(event, 'type'):
+                        if event.type == 'content_block_start':
+                            if hasattr(event, 'content_block'):
+                                block = event.content_block
+                                if hasattr(block, 'type'):
+                                    if block.type == 'thinking':
+                                        thinking_blocks.append({"thinking": "", "signature": None})
+                                    elif block.type == 'text':
+                                        text_content.append("")
+                                    elif block.type == 'tool_use':
+                                        tool_use_blocks.append({
+                                            "id": block.id,
+                                            "name": block.name,
+                                            "input": ""
+                                        })
+                        elif event.type == 'content_block_delta':
+                            if hasattr(event, 'delta'):
+                                delta = event.delta
+                                if hasattr(delta, 'type'):
+                                    if delta.type == 'thinking_delta' and hasattr(delta, 'thinking'):
+                                        if thinking_blocks:
+                                            thinking_blocks[-1]["thinking"] += delta.thinking
+                                            emit_event("AGENT_THOUGHT_STREAM", {"chunk": delta.thinking})
+                                    elif delta.type == 'text_delta' and hasattr(delta, 'text'):
+                                        if text_content:
+                                            text_content[-1] += delta.text
+                                    elif delta.type == 'input_json_delta' and hasattr(delta, 'partial_json'):
+                                        if tool_use_blocks:
+                                            tool_use_blocks[-1]["input"] += delta.partial_json
+                                    elif delta.type == 'signature_delta' and hasattr(delta, 'signature'):
+                                        # Capture signature for thinking blocks
+                                        if thinking_blocks:
+                                            if thinking_blocks[-1]["signature"] is None:
+                                                thinking_blocks[-1]["signature"] = ""
+                                            thinking_blocks[-1]["signature"] += delta.signature
+
+        except Exception as e:
+            print_status(f"API Error: {e}", "error")
+            logger.error(f"API Error: {e}")
+            break
+
+        # Process thinking content
+        thinking_texts = [tb["thinking"] for tb in thinking_blocks if tb["thinking"]]
+        if thinking_texts:
+            joined_thinking = "\n\n".join(thinking_texts)
+            if joined_thinking:
+                print_panel(joined_thinking, "Agent Thinking", "thought")
+                log_step("THOUGHT", joined_thinking)
+
+        # Process text content
+        if text_content:
+            joined_text = "\n\n".join(t for t in text_content if t)
+            if joined_text:
+                print_panel(joined_text, "Agent Message", "info")
+                log_step("MODEL", joined_text)
+
+        # Check for completion
+        combined_text = "\n".join(thinking_texts + text_content)
+        if "[DONE]" in combined_text:
+            print_status("Agent signaled completion.", "success")
+            break
+
+        # Build assistant message for history - include signature for thinking blocks
+        assistant_content = []
+        for tb in thinking_blocks:
+            if tb["thinking"]:
+                thinking_block = {"type": "thinking", "thinking": tb["thinking"]}
+                if tb["signature"]:
+                    thinking_block["signature"] = tb["signature"]
+                assistant_content.append(thinking_block)
+        for t in text_content:
+            if t:
+                assistant_content.append({"type": "text", "text": t})
+
+        # Process tool calls
+        if not tool_use_blocks:
+            if assistant_content:
+                messages.append({"role": "assistant", "content": assistant_content})
+            print_status(
+                "No tool calls in this step; assuming experiment is complete.", "info"
+            )
+            break
+
+        # Execute tool calls
+        tool_results = []
+        for tool_block in tool_use_blocks:
+            fn_name = tool_block["name"]
+            try:
+                fn_args = json.loads(tool_block["input"]) if tool_block["input"] else {}
+            except json.JSONDecodeError:
+                fn_args = {}
+
+            print_panel(f"{fn_name}({fn_args})", "Tool Call", "code")
+            log_step("TOOL_CALL", f"{fn_name}({fn_args})")
+            emit_event("AGENT_TOOL", {"tool": fn_name, "args": fn_args})
+
+            # Add tool_use to assistant content
+            assistant_content.append({
+                "type": "tool_use",
+                "id": tool_block["id"],
+                "name": fn_name,
+                "input": fn_args
+            })
+
+            if fn_name == "execute_in_sandbox":
+                result = execute_in_sandbox(**fn_args)
+            else:
+                result = (
+                    f"Unsupported tool '{fn_name}'. "
+                    "Only 'execute_in_sandbox' is available."
+                )
+
+            # Truncate long outputs
+            if isinstance(result, str) and len(result) > 20000:
+                result = (
+                    result[:10000]
+                    + "\n...[TRUNCATED]...\n"
+                    + result[-10000:]
+                )
+
+            print_panel(result, "Tool Result", "result")
+            log_step("TOOL_RESULT", "Executed")
+            emit_event("AGENT_TOOL_RESULT", {"tool": fn_name, "result": result})
+
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": tool_block["id"],
+                "content": result
+            })
+
+        # Add assistant message and tool results to history
+        messages.append({"role": "assistant", "content": assistant_content})
+        messages.append({"role": "user", "content": tool_results})
+
+    # Final report generation
+    try:
+        print_status("Generating Final Report...", "bold green")
+        messages.append({
+            "role": "user",
+            "content": (
+                "Generate a concise, information-dense report that explains "
+                "how you tested the hypothesis, what you observed, and your "
+                "final conclusion."
+            )
+        })
+
+        final_thinking = []
+        final_text = []
+
+        with client.messages.stream(
+            model="claude-opus-4-5-20251101",
+            max_tokens=16000,
+            thinking={
+                "type": "enabled",
+                "budget_tokens": 10000
+            },
+            system=system_prompt,
+            messages=messages,
+        ) as stream:
+            for event in stream:
+                if hasattr(event, 'type'):
+                    if event.type == 'content_block_start':
+                        if hasattr(event, 'content_block'):
+                            block = event.content_block
+                            if hasattr(block, 'type'):
+                                if block.type == 'thinking':
+                                    final_thinking.append("")
+                                elif block.type == 'text':
+                                    final_text.append("")
+                    elif event.type == 'content_block_delta':
+                        if hasattr(event, 'delta'):
+                            delta = event.delta
+                            if hasattr(delta, 'type'):
+                                if delta.type == 'thinking_delta' and hasattr(delta, 'thinking'):
+                                    if final_thinking:
+                                        final_thinking[-1] += delta.thinking
+                                        emit_event("AGENT_THOUGHT_STREAM", {"chunk": delta.thinking})
+                                elif delta.type == 'text_delta' and hasattr(delta, 'text'):
+                                    if final_text:
+                                        final_text[-1] += delta.text
+
+        final_report = "\n\n".join(t for t in final_text if t)
+        print_panel(final_report, "Final Report", "bold green")
+    finally:
+        _close_shared_sandbox()
+
+
+def _run_gemini_experiment_loop(hypothesis: str, gpu_hint: str):
+    """Run the experiment loop using Gemini 3 Pro with thinking mode."""
     print_status("Gemini thinking: HIGH (thought summaries visible)", "info")
 
     client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])

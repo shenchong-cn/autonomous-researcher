@@ -3,12 +3,14 @@ export const API_BASE_URL = "http://localhost:8000";
 export interface SingleExperimentRequest {
     task: string;
     gpu?: string;
+    model?: string;
     test_mode?: boolean;
 }
 
 export interface OrchestratorExperimentRequest {
     task: string;
     gpu?: string;
+    model?: string;
     num_agents: number;
     max_rounds: number;
     max_parallel: number;
@@ -53,11 +55,13 @@ export interface AgentSummaryResponse {
 
 export interface CredentialStatus {
     hasGoogleApiKey: boolean;
+    hasAnthropicApiKey: boolean;
     hasModalToken: boolean;
 }
 
 export interface CredentialUpdatePayload {
     googleApiKey?: string;
+    anthropicApiKey?: string;
     modalTokenId?: string;
     modalTokenSecret?: string;
 }
@@ -139,6 +143,7 @@ export async function fetchCredentialStatus(): Promise<CredentialStatus> {
     const data = await response.json();
     return {
         hasGoogleApiKey: Boolean(data.has_google_api_key),
+        hasAnthropicApiKey: Boolean(data.has_anthropic_api_key),
         hasModalToken: Boolean(data.has_modal_token),
     };
 }
@@ -149,6 +154,7 @@ export async function saveCredentials(payload: CredentialUpdatePayload): Promise
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
             google_api_key: payload.googleApiKey,
+            anthropic_api_key: payload.anthropicApiKey,
             modal_token_id: payload.modalTokenId,
             modal_token_secret: payload.modalTokenSecret,
         }),
@@ -162,6 +168,7 @@ export async function saveCredentials(payload: CredentialUpdatePayload): Promise
     const data = await response.json();
     return {
         hasGoogleApiKey: Boolean(data.has_google_api_key),
+        hasAnthropicApiKey: Boolean(data.has_anthropic_api_key),
         hasModalToken: Boolean(data.has_modal_token),
     };
 }

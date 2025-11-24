@@ -268,6 +268,7 @@ export function useExperiment() {
         config: {
             task: string;
             gpu?: string;
+            model?: string;
             num_agents?: number;
             max_rounds?: number;
             max_parallel?: number;
@@ -290,10 +291,11 @@ export function useExperiment() {
                 : "/api/experiments/orchestrator/stream";
 
             const payload = mode === "single"
-                ? { task: config.task, gpu: config.gpu, test_mode: config.test_mode }
+                ? { task: config.task, gpu: config.gpu, model: config.model, test_mode: config.test_mode }
                 : {
                     task: config.task,
                     gpu: config.gpu,
+                    model: config.model,
                     num_agents: config.num_agents || 3,
                     max_rounds: config.max_rounds || 3,
                     max_parallel: config.max_parallel || 2,
