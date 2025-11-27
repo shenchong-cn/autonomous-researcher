@@ -342,89 +342,586 @@ Response: {
 
 ## 6. 前端集成
 
-### 6.1 UI组件设计
+### 6.1 恢复功能入口设计
 
-#### 6.1.1 状态指示器
+#### 6.1.1 主界面集成恢复 (LabNotebook.tsx)
+
+恢复功能主要集成在现有的 `LabNotebook` 组件中，在初始状态区域添加恢复选项：
+
 ```typescript
-interface OrchestratorStatusProps {
-  experimentId: string;
-  status: 'running' | 'hung' | 'paused' | 'completed';
-  progress: number;
-  canResume: boolean;
-  onResume: () => void;
-  onSaveCheckpoint: () => void;
-}
+// 在 LabNotebook.tsx 的初始状态区域添加恢复功能
+{orchestrator.timeline.length === 0 && !isRunning && (
+  <div className="min-h-[60vh] flex flex-col justify-center items-center space-y-12">
 
-const OrchestratorStatus: React.FC<OrchestratorStatusProps> = ({
-  status,
-  progress,
-  canResume,
-  onResume,
-  onSaveCheckpoint
-}) => {
-  return (
-    <div className="orchestrator-status">
-      <div className="status-header">
-        <StatusIndicator status={status} />
-        <ProgressBar progress={progress} />
-      </div>
+    {/* 恢复功能区域 - 优先显示 */}
+    {resumableExperiments.length > 0 && (
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="w-full max-w-xl space-y-6"
+      >
+        <div className="bg-gradient-to-r from-blue-500/10 to-purple-500/10 border border-blue-500/20 rounded-xl p-6">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center">
+              <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            </div>
+            <div>
+              <h3 className="text-white font-medium">可恢复的实验</h3>
+              <p className="text-[#86868b] text-sm">发现 {resumableExperiments.length} 个中断的实验</p>
+            </div>
+          </div>
 
-      {status === 'hung' && canResume && (
-        <div className="recovery-actions">
-          <p>检测到系统可能卡住，您可以：</p>
-          <button onClick={onResume}>恢复执行</button>
-          <button onClick={onSaveCheckpoint}>保存检查点</button>
+          {/* 可恢复实验列表 */}
+          <div className="space-y-3">
+            {resumableExperiments.map((exp) => (
+              <div key={exp.experiment_id} className="bg-black/40 rounded-lg p-4 border border-white/10">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-white text-sm font-medium truncate">
+                    {exp.research_task.substring(0, 60)}...
+                  </span>
+                  <StatusBadge status={exp.status} />
+                </div>
+
+                <div className="flex items-center gap-4 text-xs text-[#86868b] mb-3">
+                  <span>进度: {exp.current_step}/{exp.max_steps}</span>
+                  <span>中断于: {formatTime(exp.updated_at)}</span>
+                  <span>已完成: {exp.completed_experiments.length} 个实验</span>
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleResume(exp.experiment_id)}
+                    className="flex-1 px-3 py-2 bg-blue-500 text-white rounded-lg text-xs font-medium hover:bg-blue-600 transition-colors"
+                  >
+                    恢复执行
+                  </button>
+                  <button
+                    onClick={() => handleViewDetails(exp.experiment_id)}
+                    className="px-3 py-2 bg-white/10 text-white rounded-lg text-xs font-medium hover:bg-white/20 transition-colors"
+                  >
+                    查看详情
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
-      )}
+      </motion.div>
+    )}
 
-      <CheckpointList experimentId={experimentId} />
+    {/* 原有的 "Research Objective" 输入区域 */}
+    <div className="space-y-6 text-center max-w-lg">
+      {/* ... 现有代码 ... */}
     </div>
-  );
-};
+  </div>
+)}
 ```
 
-#### 6.1.2 检查点管理器
-```typescript
-const CheckpointManager: React.FC<{experimentId: string}> = ({ experimentId }) => {
-  const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
+#### 6.1.2 浮动恢复按钮
 
-  const handleResume = async (checkpointId: string) => {
+在页面右上角（API Keys 按钮旁边）添加恢复按钮：
+
+```typescript
+// 在 LabNotebook.tsx 的固定按钮区域添加
+{hasResumableExperiments && (
+  <button
+    onClick={() => setShowRecoveryPanel(true)}
+    className="fixed top-16 right-4 z-50 flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-500/10 border border-blue-500/30 text-blue-400 hover:text-blue-300 hover:border-blue-500/50 transition-all duration-300"
+  >
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+    </svg>
+    <span className="text-xs font-medium">恢复实验</span>
+    {resumableCount > 0 && (
+      <span className="ml-1 px-1.5 py-0.5 bg-blue-500 text-white text-xs rounded-full">
+        {resumableCount}
+      </span>
+    )}
+  </button>
+)}
+```
+
+### 6.2 核心组件设计
+
+#### 6.2.1 恢复面板组件 (RecoveryPanel.tsx)
+
+```typescript
+interface RecoveryPanelProps {
+  open: boolean;
+  experiments: ResumableExperiment[];
+  onResume: (experimentId: string, checkpointId?: string) => void;
+  onClose: () => void;
+}
+
+export function RecoveryPanel({ open, experiments, onResume, onClose }: RecoveryPanelProps) {
+  const [selectedExperiment, setSelectedExperiment] = useState<string | null>(null);
+  const [selectedCheckpoint, setSelectedCheckpoint] = useState<string | null>(null);
+
+  const selectedExp = experiments.find(exp => exp.experiment_id === selectedExperiment);
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={onClose}
+        >
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 20 }}
+            className="bg-[#1d1d1f] border border-white/10 rounded-2xl max-w-4xl w-full max-h-[80vh] overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between p-6 border-b border-white/10">
+              <div>
+                <h2 className="text-xl font-medium text-white">恢复中断的实验</h2>
+                <p className="text-sm text-[#86868b] mt-1">选择要恢复的实验和检查点</p>
+              </div>
+              <button
+                onClick={onClose}
+                className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5 text-[#86868b]" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="flex h-[600px]">
+              {/* 实验列表 */}
+              <div className="w-1/2 border-r border-white/10 overflow-y-auto p-6">
+                <h3 className="text-sm font-medium text-white mb-4">可恢复的实验</h3>
+                <div className="space-y-3">
+                  {experiments.map((exp) => (
+                    <motion.div
+                      key={exp.experiment_id}
+                      whileHover={{ scale: 1.02 }}
+                      onClick={() => {
+                        setSelectedExperiment(exp.experiment_id);
+                        setSelectedCheckpoint(null);
+                      }}
+                      className={`p-4 rounded-lg border cursor-pointer transition-all ${
+                        selectedExperiment === exp.experiment_id
+                          ? 'bg-blue-500/10 border-blue-500/30'
+                          : 'bg-white/5 border-white/10 hover:bg-white/10'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-white text-sm font-medium truncate">
+                          {exp.research_task.substring(0, 50)}...
+                        </span>
+                        <StatusBadge status={exp.status} />
+                      </div>
+
+                      <div className="text-xs text-[#86868b] space-y-1">
+                        <div>实验ID: {exp.experiment_id}</div>
+                        <div>进度: {exp.current_step}/{exp.max_steps}</div>
+                        <div>中断时间: {formatTime(exp.updated_at)}</div>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+              </div>
+
+              {/* 检查点详情 */}
+              <div className="w-1/2 overflow-y-auto p-6">
+                {selectedExp ? (
+                  <div className="space-y-6">
+                    <div>
+                      <h3 className="text-sm font-medium text-white mb-4">实验详情</h3>
+                      <div className="bg-black/40 rounded-lg p-4 space-y-3">
+                        <div className="text-sm text-white">
+                          {selectedExp.research_task}
+                        </div>
+                        <div className="grid grid-cols-2 gap-4 text-xs text-[#86868b]">
+                          <div>模式: {selectedExp.config.num_agents} Agent</div>
+                          <div>模型: {selectedExp.model}</div>
+                          <div>已完成: {selectedExp.completed_experiments.length}</div>
+                          <div>总轮数: {selectedExp.config.max_rounds}</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <h4 className="text-sm font-medium text-white mb-3">可用检查点</h4>
+                      <div className="space-y-2">
+                        {selectedExp.available_checkpoints?.map((cp) => (
+                          <motion.div
+                            key={cp.id}
+                            whileHover={{ scale: 1.01 }}
+                            onClick={() => setSelectedCheckpoint(cp.id)}
+                            className={`p-3 rounded-lg border cursor-pointer text-sm ${
+                              selectedCheckpoint === cp.id
+                                ? 'bg-blue-500/10 border-blue-500/30'
+                                : 'bg-white/5 border-white/10 hover:bg-white/10'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="text-white">{cp.description}</span>
+                              <span className="text-[#86868b] text-xs">
+                                {formatTime(cp.created_at)}
+                              </span>
+                            </div>
+                          </motion.div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex gap-3 pt-4">
+                      <button
+                        onClick={() => {
+                          if (selectedExperiment) {
+                            onResume(selectedExperiment, selectedCheckpoint || undefined);
+                            onClose();
+                          }
+                        }}
+                        disabled={!selectedExperiment}
+                        className="flex-1 px-4 py-3 bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                      >
+                        恢复执行
+                      </button>
+                      <button
+                        onClick={onClose}
+                        className="px-4 py-3 bg-white/10 text-white rounded-lg font-medium hover:bg-white/20 transition-all"
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center h-full text-[#86868b]">
+                    选择一个实验查看详情
+                  </div>
+                )}
+              </div>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+```
+
+#### 6.2.2 状态管理 Hook (useRecovery.ts)
+
+```typescript
+export function useRecovery() {
+  const [resumableExperiments, setResumableExperiments] = useState<ResumableExperiment[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [recoveryStatus, setRecoveryStatus] = useState<RecoveryStatus>('idle');
+
+  useEffect(() => {
+    checkForResumableExperiments();
+  }, []);
+
+  const checkForResumableExperiments = async () => {
     try {
-      await api.resumeOrchestrator(experimentId, checkpointId);
-      // 刷新状态
+      setIsLoading(true);
+      const experiments = await api.getResumableExperiments();
+      setResumableExperiments(experiments);
     } catch (error) {
-      showError('恢复失败: ' + error.message);
+      console.error('Failed to check for resumable experiments:', error);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  return (
-    <div className="checkpoint-manager">
-      <h4>可用检查点</h4>
-      <ul>
-        {checkpoints.map(cp => (
-          <li key={cp.id}>
-            <span>{cp.description}</span>
-            <small>{cp.createdAt}</small>
-            <button onClick={() => handleResume(cp.id)}>
-              从此恢复
-            </button>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-};
+  const resumeExperiment = async (experimentId: string, checkpointId?: string) => {
+    try {
+      setRecoveryStatus('resuming');
+      await api.resumeExperiment(experimentId, checkpointId);
+      setRecoveryStatus('success');
+
+      // 刷新实验状态
+      await checkForResumableExperiments();
+
+      // 触发主实验状态更新
+      window.location.reload(); // 或通过状态管理更新
+    } catch (error) {
+      setRecoveryStatus('error');
+      console.error('Failed to resume experiment:', error);
+    }
+  };
+
+  return {
+    resumableExperiments,
+    isLoading,
+    recoveryStatus,
+    resumeExperiment,
+    checkForResumableExperiments
+  };
+}
 ```
 
-### 6.2 实时状态更新
+### 6.3 API 接口扩展
+
+#### 6.3.1 类型定义
+
 ```typescript
-// 使用WebSocket或Server-Sent Events实时更新状态
+// 在 api.ts 中添加恢复相关接口
+export interface ResumableExperiment {
+  experiment_id: string;
+  research_task: string;
+  model: string;
+  created_at: string;
+  updated_at: string;
+  current_step: number;
+  max_steps: number;
+  status: 'hung' | 'paused' | 'failed';
+  completed_experiments: ExperimentResult[];
+  available_checkpoints: CheckpointInfo[];
+  config: OrchestratorConfig;
+}
+
+export interface CheckpointInfo {
+  id: string;
+  description: string;
+  created_at: string;
+  step: number;
+}
+
+export interface ResumeRequest {
+  experiment_id: string;
+  checkpoint_id?: string;
+  force?: boolean;
+}
+
+export interface RecoveryStatus {
+  success: boolean;
+  message: string;
+  resumed_from_step?: number;
+  estimated_remaining_time?: string;
+}
+```
+
+#### 6.3.2 API 函数
+
+```typescript
+// 恢复相关 API 函数
+export async function getResumableExperiments(): Promise<ResumableExperiment[]> {
+  const response = await fetch(`${API_BASE_URL}/api/orchestrator/resumable`);
+  if (!response.ok) throw new Error('Failed to fetch resumable experiments');
+  return response.json();
+}
+
+export async function getExperimentState(experimentId: string): Promise<OrchestratorState> {
+  const response = await fetch(`${API_BASE_URL}/api/orchestrator/state/${experimentId}`);
+  if (!response.ok) throw new Error('Failed to fetch experiment state');
+  return response.json();
+}
+
+export async function resumeExperiment(request: ResumeRequest): Promise<RecoveryStatus> {
+  const response = await fetch(`${API_BASE_URL}/api/orchestrator/resume`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  });
+  if (!response.ok) throw new Error('Failed to resume experiment');
+  return response.json();
+}
+
+export async function createCheckpoint(experimentId: string, description: string): Promise<CheckpointInfo> {
+  const response = await fetch(`${API_BASE_URL}/api/orchestrator/checkpoint`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ experiment_id: experimentId, description })
+  });
+  if (!response.ok) throw new Error('Failed to create checkpoint');
+  return response.json();
+}
+
+export async function deleteCheckpoint(experimentId: string, checkpointId: string): Promise<boolean> {
+  const response = await fetch(`${API_BASE_URL}/api/orchestrator/checkpoint/${checkpointId}`, {
+    method: 'DELETE'
+  });
+  return response.ok;
+}
+```
+
+### 6.4 用户体验流程
+
+#### 6.4.1 自动检测恢复流程
+
+```typescript
+// 用户打开页面时的自动检测流程
+useEffect(() => {
+  const initializeRecovery = async () => {
+    // 1. 检查是否有可恢复的实验
+    const resumable = await api.getResumableExperiments();
+
+    if (resumable.length > 0) {
+      // 2. 显示恢复选项
+      setResumableExperiments(resumable);
+
+      // 3. 如果有卡住的实验，显示提示
+      const hungExperiments = resumable.filter(exp => exp.status === 'hung');
+      if (hungExperiments.length > 0) {
+        showNotification({
+          type: 'warning',
+          title: '检测到卡住的实验',
+          message: `发现 ${hungExperiments.length} 个可能卡住的实验，可以选择恢复执行。`,
+          action: { label: '查看恢复选项', onClick: () => setShowRecoveryPanel(true) }
+        });
+      }
+    }
+  };
+
+  initializeRecovery();
+}, []);
+```
+
+#### 6.4.2 卡住状态实时检测
+
+```typescript
+// 使用 Server-Sent Events 实时监控实验状态
 const useOrchestratorStatus = (experimentId: string) => {
   const [status, setStatus] = useState<OrchestratorStatus | null>(null);
 
   useEffect(() => {
+    if (!experimentId) return;
+
     const eventSource = new EventSource(
-      `/api/orchestrator/status/${experimentId}/stream`
+      `${API_BASE_URL}/api/orchestrator/status/${experimentId}/stream`
+    );
+
+    eventSource.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      setStatus(data);
+
+      // 检测到卡住状态时的处理
+      if (data.status === 'hung' && data.can_resume) {
+        showHungDetectionDialog(data);
+      }
+    };
+
+    return () => eventSource.close();
+  }, [experimentId]);
+
+  return status;
+};
+
+const showHungDetectionDialog = (status: OrchestratorStatus) => {
+  showModal({
+    title: '实验可能卡住',
+    content: (
+      <div className="space-y-4">
+        <p>实验已 {formatTime(status.last_activity)} 没有活动，可能已经卡住。</p>
+        <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3">
+          <p className="text-sm text-yellow-300">
+            您可以选择等待更长时间，或者恢复实验到最近的检查点。
+          </p>
+        </div>
+      </div>
+    ),
+    actions: [
+      { label: '继续等待', variant: 'secondary', onClick: () => {} },
+      { label: '恢复实验', variant: 'primary', onClick: () => handleResume(status.experiment_id) }
+    ]
+  });
+};
+```
+
+### 6.5 视觉设计规范
+
+#### 6.5.1 颜色系统
+
+```css
+/* 恢复功能专用颜色 */
+:root {
+  --recovery-primary: #3b82f6;        /* 蓝色 - 主要操作 */
+  --recovery-secondary: #8b5cf6;      /* 紫色 - 次要操作 */
+  --recovery-success: #10b981;        /* 绿色 - 成功状态 */
+  --recovery-warning: #f59e0b;        /* 黄色 - 警告状态 */
+  --recovery-error: #ef4444;          /* 红色 - 错误状态 */
+  --recovery-bg: rgba(59, 130, 246, 0.1);  /* 背景蓝色 */
+  --recovery-border: rgba(59, 130, 246, 0.2); /* 边框蓝色 */
+}
+```
+
+#### 6.5.2 动画规范
+
+```typescript
+// 统一的动画配置
+export const recoveryAnimations = {
+  // 面板出现动画
+  panelAppear: {
+    initial: { opacity: 0, scale: 0.95, y: 20 },
+    animate: { opacity: 1, scale: 1, y: 0 },
+    exit: { opacity: 0, scale: 0.95, y: 20 },
+    transition: { duration: 0.2, ease: "easeOut" }
+  },
+
+  // 卡片悬停动画
+  cardHover: {
+    whileHover: { scale: 1.02 },
+    transition: { duration: 0.15, ease: "easeOut" }
+  },
+
+  // 状态指示器动画
+  pulseIndicator: {
+    animate: { scale: [1, 1.1, 1], opacity: [1, 0.7, 1] },
+    transition: { duration: 2, repeat: Infinity }
+  }
+};
+```
+
+### 6.6 响应式设计
+
+```typescript
+// 响应式布局适配
+export const RecoveryPanel = ({ open, experiments, onResume, onClose }: RecoveryPanelProps) => {
+  return (
+    <AnimatePresence>
+      {open && (
+        <motion.div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <motion.div className="bg-[#1d1d1f] border border-white/10 rounded-2xl w-full max-h-[90vh] overflow-hidden
+                         /* 响应式宽度 */
+                         max-w-4xl lg:max-w-4xl md:max-w-2xl sm:max-w-full
+                         /* 响应式高度 */
+                         h-[80vh] lg:h-[80vh] md:h-[70vh] sm:h-[60vh]">
+
+            {/* 移动端适配：单列布局 */}
+            <div className="flex flex-col lg:flex-row md:flex-col sm:flex-col h-[600px] lg:h-[600px] md:h-[500px] sm:h-[400px]">
+              {/* 实验列表 */}
+              <div className="flex-1 lg:flex-1 md:flex-1 sm:flex-1 overflow-y-auto p-6
+                         border-r lg:border-r border-white/10 md:border-r-0 sm:border-r-0">
+                {/* ... */}
+              </div>
+
+              {/* 检查点详情 */}
+              <div className="flex-1 lg:flex-1 md:flex-1 sm:flex-1 overflow-y-auto p-6">
+                {/* ... */}
+              </div>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+};
+```
+
+### 6.7 实时状态更新
+
+#### 6.7.1 Server-Sent Events 实现
+
+```typescript
+// 使用Server-Sent Events实时更新状态
+const useOrchestratorStatus = (experimentId: string) => {
+  const [status, setStatus] = useState<OrchestratorStatus | null>(null);
+
+  useEffect(() => {
+    if (!experimentId) return;
+
+    const eventSource = new EventSource(
+      `${API_BASE_URL}/api/orchestrator/status/${experimentId}/stream`
     );
 
     eventSource.onmessage = (event) => {
@@ -432,10 +929,44 @@ const useOrchestratorStatus = (experimentId: string) => {
       setStatus(data);
     };
 
+    eventSource.onerror = (error) => {
+      console.error('SSE connection error:', error);
+    };
+
     return () => eventSource.close();
   }, [experimentId]);
 
   return status;
+};
+```
+
+#### 6.7.2 恢复进度监控
+
+```typescript
+// 监控恢复过程的进度
+const useRecoveryProgress = (experimentId: string) => {
+  const [progress, setProgress] = useState<RecoveryProgress>({
+    stage: 'idle',
+    percentage: 0,
+    message: ''
+  });
+
+  useEffect(() => {
+    if (!experimentId) return;
+
+    const eventSource = new EventSource(
+      `${API_BASE_URL}/api/orchestrator/recovery/${experimentId}/progress`
+    );
+
+    eventSource.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      setProgress(data);
+    };
+
+    return () => eventSource.close();
+  }, [experimentId]);
+
+  return progress;
 };
 ```
 
@@ -483,6 +1014,196 @@ def migrate_state_format(state_data: dict, from_version: str, to_version: str) -
         }
 
     return state_data
+```
+
+### 7.3 前端错误处理
+
+#### 7.3.1 网络错误处理
+
+```typescript
+// API 错误处理 Hook
+const useApiErrorHandling = () => {
+  const [error, setError] = useState<string | null>(null);
+
+  const handleApiError = (error: Error, context: string) => {
+    console.error(`${context}:`, error);
+
+    if (error.message.includes('Failed to fetch')) {
+      setError('网络连接失败，请检查网络连接后重试');
+    } else if (error.message.includes('401')) {
+      setError('认证失败，请检查 API 密钥配置');
+    } else if (error.message.includes('404')) {
+      setError('请求的资源不存在，可能实验已过期');
+    } else if (error.message.includes('500')) {
+      setError('服务器内部错误，请稍后重试');
+    } else {
+      setError(error.message);
+    }
+
+    // 5秒后自动清除错误
+    setTimeout(() => setError(null), 5000);
+  };
+
+  return { error, handleApiError, clearError: () => setError(null) };
+};
+```
+
+#### 7.3.2 恢复失败处理
+
+```typescript
+// 恢复失败的 UI 反馈
+const RecoveryFailureHandler = ({
+  error,
+  onRetry,
+  onAlternative
+}: {
+  error: string;
+  onRetry: () => void;
+  onAlternative: () => void;
+}) => {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 mb-4"
+    >
+      <div className="flex items-start gap-3">
+        <div className="w-5 h-5 rounded-full bg-red-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
+          <svg className="w-3 h-3 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </div>
+        <div className="flex-1">
+          <h4 className="text-red-300 font-medium text-sm mb-1">恢复失败</h4>
+          <p className="text-red-400/70 text-xs mb-3">{error}</p>
+          <div className="flex gap-2">
+            <button
+              onClick={onRetry}
+              className="px-3 py-1.5 bg-red-500/20 text-red-300 rounded text-xs font-medium hover:bg-red-500/30 transition-colors"
+            >
+              重试
+            </button>
+            <button
+              onClick={onAlternative}
+              className="px-3 py-1.5 bg-white/10 text-white rounded text-xs font-medium hover:bg-white/20 transition-colors"
+            >
+              开始新实验
+            </button>
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+};
+```
+
+#### 7.3.3 状态同步问题处理
+
+```typescript
+// 处理前后端状态不一致的问题
+const useStateSync = (experimentId: string) => {
+  const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'error'>('synced');
+  const [lastSyncTime, setLastSyncTime] = useState<Date>(new Date());
+
+  const syncState = async () => {
+    setSyncStatus('syncing');
+    try {
+      // 获取服务器最新状态
+      const serverState = await api.getExperimentState(experimentId);
+
+      // 与本地状态对比
+      const localState = getLocalState(experimentId);
+
+      if (hasStateConflict(serverState, localState)) {
+        // 处理状态冲突
+        await resolveStateConflict(serverState, localState);
+      }
+
+      updateLocalState(serverState);
+      setLastSyncTime(new Date());
+      setSyncStatus('synced');
+    } catch (error) {
+      setSyncStatus('error');
+      console.error('状态同步失败:', error);
+    }
+  };
+
+  return { syncStatus, lastSyncTime, syncState };
+};
+```
+
+#### 7.3.4 用户操作确认
+
+```typescript
+// 危险操作的二次确认
+const ConfirmationDialog = ({
+  open,
+  title,
+  message,
+  confirmText = '确认',
+  cancelText = '取消',
+  onConfirm,
+  onCancel,
+  type = 'warning'
+}: ConfirmationDialogProps) => {
+  return (
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+        >
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="bg-[#1d1d1f] border border-white/10 rounded-xl max-w-md w-full p-6"
+          >
+            <div className="flex items-center gap-3 mb-4">
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                type === 'warning' ? 'bg-yellow-500/20' : 'bg-red-500/20'
+              }`}>
+                {type === 'warning' ? (
+                  <svg className="w-4 h-4 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                  </svg>
+                ) : (
+                  <svg className="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                )}
+              </div>
+              <h3 className="text-white font-medium">{title}</h3>
+            </div>
+
+            <p className="text-[#86868b] text-sm mb-6">{message}</p>
+
+            <div className="flex gap-3">
+              <button
+                onClick={onCancel}
+                className="flex-1 px-4 py-2 bg-white/10 text-white rounded-lg font-medium hover:bg-white/20 transition-colors"
+              >
+                {cancelText}
+              </button>
+              <button
+                onClick={onConfirm}
+                className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${
+                  type === 'warning'
+                    ? 'bg-yellow-500 text-black hover:bg-yellow-600'
+                    : 'bg-red-500 text-white hover:bg-red-600'
+                }`}
+              >
+                {confirmText}
+              </button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+};
 ```
 
 ## 8. 性能优化
