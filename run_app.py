@@ -98,7 +98,7 @@ def main():
     if not (frontend_dir / "node_modules").exists():
         print_status("Installing frontend dependencies...", "cyan")
         try:
-            subprocess.run(["npm", "install"], cwd=frontend_dir, check=True, shell=True)
+            subprocess.run(["npm", "install"], cwd=frontend_dir, check=True, shell=False)
         except subprocess.CalledProcessError as e:
             print_status(f"Failed to install frontend dependencies: {e}", "red")
             print_status("Please ensure Node.js and npm are properly installed", "yellow")
@@ -125,12 +125,12 @@ def main():
     # 4. Start Frontend
     print_status("Starting Frontend Dev Server...", "green")
     frontend_process = subprocess.Popen(
-        ["npm", "run", "dev", "--", "--port", "5173"],
+        ["npm", "run", "dev"],
         cwd=frontend_dir,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        shell=True
+        shell=False
     )
     
     # Wait a bit for servers to spin up
@@ -159,9 +159,11 @@ def main():
                 break
             if frontend_process.poll() is not None:
                 print_status("Frontend process exited unexpectedly.", "red")
-                # Print frontend error if it failed
+                # Print frontend output and error if it failed
+                if frontend_process.stdout:
+                    print("Frontend stdout:", frontend_process.stdout.read())
                 if frontend_process.stderr:
-                    print(frontend_process.stderr.read())
+                    print("Frontend stderr:", frontend_process.stderr.read())
                 break
     except KeyboardInterrupt:
         print_status("\nStopping system...", "yellow")
