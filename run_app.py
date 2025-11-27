@@ -91,7 +91,7 @@ def main():
     ensure_venv(root_dir)
     
     # 1. Cleanup Ports
-    kill_port(8000)
+    kill_port(8001)
     kill_port(5173)
     
     # 2. Install Frontend Dependencies if needed

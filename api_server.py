@@ -850,7 +850,7 @@ if __name__ == "__main__":
     # during development instead of calling uvicorn manually.
     import uvicorn
 
-    port = int(os.environ.get("PORT", 8000))
+    port = int(os.environ.get("PORT", 8001))
     reload_enabled = os.environ.get("RAILWAY_ENVIRONMENT") is None  # Disable reload in production
 
     uvicorn.run(
