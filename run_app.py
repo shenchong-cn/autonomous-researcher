@@ -22,42 +22,62 @@ def print_status(msg, color="white"):
 def kill_port(port):
     """Kill any process listening on the specified port."""
     try:
-        # Find PID using lsof
-        result = subprocess.run(
-            ["lsof", "-t", "-i", f":{port}"],
-            capture_output=True,
-            text=True
-        )
-        pids = result.stdout.strip().split('\n')
-        
-        for pid in pids:
-            if pid:
-                print_status(f"Killing existing process on port {port} (PID: {pid})...", "yellow")
-                subprocess.run(["kill", "-9", pid], check=False)
+        if os.name == 'nt':  # Windows
+            # Use netstat to find PIDs using the port
+            result = subprocess.run(
+                ["netstat", "-ano", "-p", "tcp"],
+                capture_output=True,
+                text=True
+            )
+            for line in result.stdout.split('\n'):
+                if f":{port}" in line and "LISTENING" in line:
+                    parts = line.split()
+                    if len(parts) >= 5:
+                        pid = parts[-1]
+                        print_status(f"Killing existing process on port {port} (PID: {pid})...", "yellow")
+                        subprocess.run(["taskkill", "/F", "/PID", pid], check=False)
+        else:  # Unix/Linux/macOS
+            # Use lsof to find PIDs
+            result = subprocess.run(
+                ["lsof", "-t", "-i", f":{port}"],
+                capture_output=True,
+                text=True
+            )
+            pids = result.stdout.strip().split('\n')
+
+            for pid in pids:
+                if pid:
+                    print_status(f"Killing existing process on port {port} (PID: {pid})...", "yellow")
+                    subprocess.run(["kill", "-9", pid], check=False)
     except Exception as e:
-        # lsof might not be installed or other error, just ignore
+        # Commands might not be available or other error, just ignore
         pass
 
 def ensure_venv(root_dir):
     """Ensure a virtual environment exists and is used."""
     venv_dir = root_dir / "venv"
-    venv_python = venv_dir / "bin" / "python"
-    
+
+    # Platform-specific Python executable path
+    if os.name == 'nt':  # Windows
+        venv_python = venv_dir / "Scripts" / "python.exe"
+    else:  # Unix/Linux/macOS
+        venv_python = venv_dir / "bin" / "python"
+
     # If we are already running in the venv, continue
     if sys.prefix == str(venv_dir):
         return sys.executable
 
     print_status("Checking environment...", "cyan")
-    
+
     # Create venv if it doesn't exist
     if not venv_dir.exists():
         print_status("Creating virtual environment...", "yellow")
         subprocess.run([sys.executable, "-m", "venv", "venv"], cwd=root_dir, check=True)
-        
+
         # Install requirements
         print_status("Installing backend dependencies...", "yellow")
         subprocess.run([str(venv_python), "-m", "pip", "install", "-r", "requirements.txt"], cwd=root_dir, check=True)
-    
+
     # Re-execute this script using the venv python
     print_status("Switching to virtual environment...", "cyan")
     os.execv(str(venv_python), [str(venv_python)] + sys.argv)
@@ -77,14 +97,24 @@ def main():
     # 2. Install Frontend Dependencies if needed
     if not (frontend_dir / "node_modules").exists():
         print_status("Installing frontend dependencies...", "cyan")
-        subprocess.run(["npm", "install"], cwd=frontend_dir, check=True)
+        try:
+            subprocess.run(["npm", "install"], cwd=frontend_dir, check=True, shell=True)
+        except subprocess.CalledProcessError as e:
+            print_status(f"Failed to install frontend dependencies: {e}", "red")
+            print_status("Please ensure Node.js and npm are properly installed", "yellow")
+            return
     
     # 3. Start Backend
     print_status("Starting Backend API...", "green")
     backend_env = os.environ.copy()
     # Ensure backend sees the venv
     backend_env["VIRTUAL_ENV"] = str(root_dir / "venv")
-    backend_env["PATH"] = f"{root_dir}/venv/bin:{backend_env['PATH']}"
+
+    # Platform-specific PATH setup
+    if os.name == 'nt':  # Windows
+        backend_env["PATH"] = f"{root_dir}/venv/Scripts;{backend_env['PATH']}"
+    else:  # Unix/Linux/macOS
+        backend_env["PATH"] = f"{root_dir}/venv/bin:{backend_env['PATH']}"
     
     backend_process = subprocess.Popen(
         [sys.executable, "api_server.py"],
@@ -99,15 +129,25 @@ def main():
         cwd=frontend_dir,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True
+        text=True,
+        shell=True
     )
     
     # Wait a bit for servers to spin up
     time.sleep(3)
-    
+
     # 5. Open Browser
     print_status("Opening Fractal Notebook...", "magenta")
-    webbrowser.open("http://localhost:5173")
+    # Check if frontend is running on expected port or alternative
+    frontend_url = "http://localhost:5173"
+    try:
+        import requests
+        response = requests.get(frontend_url, timeout=2)
+    except:
+        # If port 5173 is not accessible, try 5174 (common alternative)
+        frontend_url = "http://localhost:5174"
+
+    webbrowser.open(frontend_url)
     
     print_status("System Running. Press Ctrl+C to stop.", "cyan")
     

@@ -306,6 +306,10 @@ app = FastAPI(
 from fastapi.middleware.cors import CORSMiddleware
 
 # Optional, lightweight summarizer (kept outside agent logic)
+# Force reload to pick up changes
+import importlib
+import insights
+importlib.reload(insights)
 from insights import summarize_agent_findings
 
 # For Railway/production: allow all origins, or be more specific
@@ -436,6 +440,20 @@ def _run_and_capture(
     env = dict(os.environ)
     env["AI_RESEARCHER_ENABLE_EVENTS"] = "1"
 
+    # Add proxy SSL support for environments requiring proxy access
+    env["PYTHONHTTPSVERIFY"] = "0"
+    env["REQUESTS_CA_BUNDLE"] = ""
+
+    # Add proxy support and connection timeouts
+    env["HTTP_PROXY"] = os.environ.get("HTTP_PROXY", "")
+    env["HTTPS_PROXY"] = os.environ.get("HTTPS_PROXY", "")
+    env["NO_PROXY"] = os.environ.get("NO_PROXY", "localhost,127.0.0.1,0.0.0.0")
+    env["no_proxy"] = os.environ.get("no_proxy", "localhost,127.0.0.1,0.0.0.0")
+
+    # Increase timeouts for proxy connections
+    env["HTTPX_TIMEOUT"] = "60"
+    env["REQUESTS_TIMEOUT"] = "60"
+
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -524,6 +542,20 @@ def _stream_subprocess(
     # can consume ::EVENT::-prefixed messages.
     env = dict(os.environ)
     env["AI_RESEARCHER_ENABLE_EVENTS"] = "1"
+
+    # Add proxy SSL support for environments requiring proxy access
+    env["PYTHONHTTPSVERIFY"] = "0"
+    env["REQUESTS_CA_BUNDLE"] = ""
+
+    # Add proxy support and connection timeouts
+    env["HTTP_PROXY"] = os.environ.get("HTTP_PROXY", "")
+    env["HTTPS_PROXY"] = os.environ.get("HTTPS_PROXY", "")
+    env["NO_PROXY"] = os.environ.get("NO_PROXY", "localhost,127.0.0.1,0.0.0.0")
+    env["no_proxy"] = os.environ.get("no_proxy", "localhost,127.0.0.1,0.0.0.0")
+
+    # Increase timeouts for proxy connections
+    env["HTTPX_TIMEOUT"] = "60"
+    env["REQUESTS_TIMEOUT"] = "60"
 
     # Override with user-provided credentials if present
     if credentials:

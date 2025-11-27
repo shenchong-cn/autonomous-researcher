@@ -4,6 +4,21 @@ import threading
 import json
 from typing import Optional, List
 
+# 使用TUN模式（全局VPN）连接Modal服务器
+print("[DEBUG] 使用TUN模式全局VPN连接Modal", file=sys.stderr)
+
+# 清除所有代理设置，让TUN模式处理所有流量
+proxy_vars = [
+    "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
+    "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy",
+    "GRPC_PROXY", "GRPC_TRACE", "GRPC_VERBOSITY"
+]
+
+for var in proxy_vars:
+    os.environ.pop(var, None)
+
+print("[DEBUG] 已清除所有代理设置，使用TUN模式", file=sys.stderr)
+
 from google import genai
 from google.genai import types
 
