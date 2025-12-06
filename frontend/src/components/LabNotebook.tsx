@@ -1,12 +1,10 @@
 import { useState, useEffect, useRef } from "react";
-import { Loader2, Play, RefreshCw } from "lucide-react";
+import { Loader2, Play } from "lucide-react";
 import { motion } from "framer-motion";
 import { useExperiment } from "@/lib/useExperiment";
-import { useRecovery } from "@/lib/useRecovery";
 import { FindingsRail } from "./FindingsRail";
 import { AgentNotebook } from "./Notebook/AgentNotebook";
 import { ResearchPaper } from "./Notebook/ResearchPaper";
-import { RecoveryPanel } from "./RecoveryPanel";
 import { cn } from "@/lib/utils";
 import { StreamingMarkdown } from "./StreamingMarkdown";
 import { CredentialPrompt, CredentialFormState } from "./CredentialPrompt";
@@ -27,18 +25,6 @@ type PendingRun = {
 
 export function LabNotebook() {
   const { isRunning, agents, orchestrator, error: experimentError, startExperiment, clearError } = useExperiment();
-  const {
-    resumableExperiments,
-    isLoading: recoveryLoading,
-    recoveryStatus,
-    error: recoveryError,
-    hasResumableExperiments,
-    resumableCount,
-    resumeExperiment,
-    deleteExperimentState,
-    clearError: clearRecoveryError
-  } = useRecovery();
-
   const [task, setTask] = useState("");
   const [mode, setMode] = useState<"single" | "orchestrator">("orchestrator");
   const [testMode, setTestMode] = useState(false);
@@ -53,7 +39,6 @@ export function LabNotebook() {
   });
   const [selectedModel, setSelectedModel] = useState<"gemini-3-pro-preview" | "claude-opus-4-5">("gemini-3-pro-preview");
   const [showCredentialPrompt, setShowCredentialPrompt] = useState(false);
-  const [showRecoveryPanel, setShowRecoveryPanel] = useState(false);
   const [pendingRun, setPendingRun] = useState<PendingRun | null>(null);
   const [isCheckingCredentials, setIsCheckingCredentials] = useState(false);
   const [isSavingCredentials, setIsSavingCredentials] = useState(false);
@@ -71,30 +56,26 @@ export function LabNotebook() {
 
   // Auto-scroll effect
   useEffect(() => {
-    if (!orchestrator.timeline || !Array.isArray(orchestrator.timeline)) {
-      return;
-    }
-
     const currentLength = orchestrator.timeline.length;
     const prevLength = prevTimelineLengthRef.current;
 
     if (currentLength > prevLength) {
       const lastItem = orchestrator.timeline[currentLength - 1];
-      if (lastItem && (lastItem.type === "agents" || lastItem.type === "paper" || currentLength === 1)) {
+      if (lastItem.type === "agents" || lastItem.type === "paper" || currentLength === 1) {
         // Scroll slightly above the new element to keep context
         // We do this by scrolling to the bottom ref, but with 'start' block alignment if possible,
         // or just letting the padding handle it.
         // Actually, let's scroll to the *element itself* if we could, but since we use bottomRef,
-        // let's just scroll smoothly to it.
+        // let's just scroll smoothly to it. 
         // The user said it "goes a little too far", implying it might be scrolling past the top of the new content.
         // Or maybe it scrolls so the bottom is at the bottom of the screen?
-        // "scrollIntoView" aligns the element to the top or bottom.
-
+        // "scrollIntoView" aligns the element to the top or bottom. 
+        
         // Let's try aligning the bottomRef to the 'end' of the view, but give it some breathing room.
         bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
       }
     }
-
+    
     prevTimelineLengthRef.current = currentLength;
   }, [orchestrator.timeline]);
 
@@ -205,7 +186,7 @@ export function LabNotebook() {
         <main className="flex-1 flex flex-col overflow-hidden relative">
 
         {/* Sticky Header for Active Research */}
-        {orchestrator.timeline && orchestrator.timeline.length > 0 && (
+        {orchestrator.timeline.length > 0 && (
             <div className="absolute top-0 left-0 right-0 z-50 bg-black/80 backdrop-blur-xl border-b border-white/5 animate-in fade-in slide-in-from-top-4 duration-500">
                 <div className="max-w-5xl mx-auto px-8 py-4 flex items-center gap-4">
                     <span className="text-[10px] font-medium text-[#424245] uppercase tracking-widest shrink-0">
@@ -223,90 +204,8 @@ export function LabNotebook() {
             <div className="max-w-5xl mx-auto py-24 px-8 space-y-32">
                 
                 {/* Initial Input State (Only visible when timeline is empty, not running, and no error) */}
-                {(!orchestrator.timeline || orchestrator.timeline.length === 0) && !isRunning && !experimentError && (
+                {orchestrator.timeline.length === 0 && !isRunning && !experimentError && (
                     <div className="min-h-[60vh] flex flex-col justify-center items-center space-y-12 animate-in fade-in duration-1000">
-
-                        {/* Recovery Section - Priority */}
-                        {hasResumableExperiments && (
-                            <motion.div
-                                initial={{ opacity: 0, scale: 0.95 }}
-                                animate={{ opacity: 1, scale: 1 }}
-                                className="w-full max-w-xl space-y-6"
-                            >
-                                <div className="bg-gradient-to-r from-blue-500/10 to-purple-500/10 border border-blue-500/20 rounded-xl p-6">
-                                    <div className="flex items-center gap-3 mb-4">
-                                        <div className="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center">
-                                            <RefreshCw className="w-4 h-4 text-blue-400" />
-                                        </div>
-                                        <div>
-                                            <h3 className="text-white font-medium">可恢复的实验</h3>
-                                            <p className="text-[#86868b] text-sm">发现 {resumableCount} 个中断的实验</p>
-                                        </div>
-                                    </div>
-
-                                    {/* Resumable experiments list */}
-                                    <div className="space-y-3">
-                                        {resumableExperiments.slice(0, 2).map((exp) => (
-                                            <div key={exp.experiment_id} className="bg-black/40 rounded-lg p-4 border border-white/10">
-                                                <div className="flex items-center justify-between mb-2">
-                                                    <span className="text-white text-sm font-medium truncate">
-                                                        {exp.research_task.substring(0, 60)}...
-                                                    </span>
-                                                    <span className={`text-xs ${
-                                                        exp.status === 'hung' ? 'text-yellow-400' :
-                                                        exp.status === 'paused' ? 'text-blue-400' :
-                                                        exp.status === 'running' ? 'text-green-400' :
-                                                        exp.status === 'failed' ? 'text-red-400' :
-                                                        'text-gray-400'
-                                                    }`}>
-                                                        {exp.status === 'hung' ? '卡住' :
-                                                         exp.status === 'paused' ? '暂停' :
-                                                         exp.status === 'running' ? '运行中' :
-                                                         exp.status === 'failed' ? '失败' : exp.status}
-                                                    </span>
-                                                </div>
-
-                                                <div className="flex items-center gap-4 text-xs text-[#86868b] mb-3">
-                                                    <span>进度: {exp.current_step}/{exp.max_steps}</span>
-                                                    <span>中断于: {new Date(exp.updated_at).toLocaleString('zh-CN', {
-                                                        month: 'short',
-                                                        day: 'numeric',
-                                                        hour: '2-digit',
-                                                        minute: '2-digit'
-                                                    })}</span>
-                                                    <span>已完成: {exp.completed_experiments.length} 个实验</span>
-                                                </div>
-
-                                                <div className="flex gap-2">
-                                                    <button
-                                                        onClick={() => setShowRecoveryPanel(true)}
-                                                        className="flex-1 px-3 py-2 bg-blue-500 text-white rounded-lg text-xs font-medium hover:bg-blue-600 transition-colors"
-                                                    >
-                                                        恢复执行
-                                                    </button>
-                                                    <button
-                                                        onClick={() => setShowRecoveryPanel(true)}
-                                                        className="px-3 py-2 bg-white/10 text-white rounded-lg text-xs font-medium hover:bg-white/20 transition-colors"
-                                                    >
-                                                        查看详情
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-
-                                    {resumableExperiments.length > 2 && (
-                                        <button
-                                            onClick={() => setShowRecoveryPanel(true)}
-                                            className="w-full px-4 py-2 bg-blue-500/20 text-blue-400 rounded-lg text-xs font-medium hover:bg-blue-500/30 transition-colors"
-                                        >
-                                            查看全部 {resumableExperiments.length} 个可恢复实验
-                                        </button>
-                                    )}
-                                </div>
-                            </motion.div>
-                        )}
-
                         <div className="space-y-6 text-center max-w-lg">
                             <h1 className="text-4xl md:text-5xl font-light tracking-tight text-white">
                                 Research Objective
@@ -396,7 +295,7 @@ export function LabNotebook() {
                 )}
 
                 {/* Error State (Visible when experiment failed) */}
-                {experimentError && !isRunning && (!orchestrator.timeline || orchestrator.timeline.length === 0) && (
+                {experimentError && !isRunning && orchestrator.timeline.length === 0 && (
                     <div className="min-h-[60vh] flex flex-col justify-center items-center space-y-8 animate-in fade-in duration-700">
                         <div className="space-y-4 text-center max-w-lg">
                             <div className="w-16 h-16 mx-auto rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center">
@@ -422,7 +321,7 @@ export function LabNotebook() {
                 )}
 
                 {/* Loading State (Visible when running but no timeline events yet) */}
-                {(!orchestrator.timeline || orchestrator.timeline.length === 0) && isRunning && (
+                {orchestrator.timeline.length === 0 && isRunning && (
                     <div className="min-h-[60vh] flex flex-col justify-center items-center space-y-8 animate-in fade-in duration-700">
                         <div className="relative">
                             <div className="absolute inset-0 bg-white/20 blur-xl rounded-full animate-pulse"></div>
@@ -443,7 +342,7 @@ export function LabNotebook() {
                 )}
 
                 {/* Timeline Rendering */}
-                {orchestrator.timeline && orchestrator.timeline.map((item, index) => {
+                {orchestrator.timeline.map((item, index) => {
                     const key = item.timestamp ?? `${item.type}-${index}`;
                     if (item.type === "thought") {
                         return (
@@ -511,7 +410,7 @@ export function LabNotebook() {
                 })}
                 
                 {/* Running Indicator at Bottom */}
-                {isRunning && orchestrator.timeline && orchestrator.timeline.length > 0 && (
+                {isRunning && orchestrator.timeline.length > 0 && (
                     <div className="flex justify-center py-12">
                         <div className="flex items-center gap-3 px-4 py-2 rounded-full bg-[#1d1d1f] border border-[#333]">
                             <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
@@ -546,37 +445,6 @@ export function LabNotebook() {
         onClose={handleCloseCredentialPrompt}
         isSaving={isSavingCredentials}
         error={credentialPromptError}
-      />
-
-      {/* Floating Recovery Button */}
-      {hasResumableExperiments && !isRunning && (
-        <button
-          onClick={() => setShowRecoveryPanel(true)}
-          className="fixed top-16 right-4 z-40 flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-500/10 border border-blue-500/30 text-blue-400 hover:text-blue-300 hover:border-blue-500/50 transition-all duration-300"
-        >
-          <RefreshCw className="w-4 h-4" />
-          <span className="text-xs font-medium">恢复实验</span>
-          {resumableCount > 0 && (
-            <span className="ml-1 px-1.5 py-0.5 bg-blue-500 text-white text-xs rounded-full">
-              {resumableCount}
-            </span>
-          )}
-        </button>
-      )}
-
-      {/* Recovery Panel */}
-      <RecoveryPanel
-        open={showRecoveryPanel}
-        experiments={resumableExperiments}
-        onResume={resumeExperiment}
-        onDelete={deleteExperimentState}
-        onClose={() => {
-          setShowRecoveryPanel(false);
-          clearRecoveryError();
-        }}
-        recoveryStatus={recoveryStatus}
-        error={recoveryError}
-        clearError={clearRecoveryError}
       />
     </div>
   );

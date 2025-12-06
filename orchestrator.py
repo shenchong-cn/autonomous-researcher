@@ -406,7 +406,6 @@ def run_orchestrator_loop(
     max_parallel_experiments: int = 2,
     test_mode: bool = False,
     model: str = "gemini-3-pro-preview",
-    resume_from: Optional[str] = None,
 ) -> None:
     """
     Main orchestrator loop using Gemini 3 Pro or Claude Opus 4.5 with thinking + manual tool calling.
@@ -419,8 +418,6 @@ def run_orchestrator_loop(
         max_parallel_experiments: Maximum number of experiments to run in parallel
                                   in a single wave of tool calls.
         test_mode: If True, runs in test mode with mock data.
-        model: LLM model to use for orchestrator.
-        resume_from: If provided, resume from a specific experiment ID.
         model: LLM model to use ("gemini-3-pro-preview" or "claude-opus-4-5").
     """
     global _default_gpu, _default_model

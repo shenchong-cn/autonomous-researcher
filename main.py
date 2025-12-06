@@ -85,12 +85,6 @@ def main():
             "'gemini-3-pro-preview' (default) or 'claude-opus-4-5'."
         ),
     )
-    parser.add_argument(
-        "--resume-from",
-        type=str,
-        default=None,
-        help="(orchestrator) Resume from a specific experiment ID.",
-    )
 
     args = parser.parse_args()
 
@@ -128,7 +122,6 @@ def main():
                 max_parallel_experiments=args.max_parallel,
                 test_mode=args.test_mode,
                 model=args.model,
-                resume_from=args.resume_from,
             )
         except KeyboardInterrupt:
             print_status("\nOrchestrated experiment interrupted by user.", "bold red")

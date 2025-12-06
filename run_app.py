@@ -55,10 +55,7 @@ def kill_port(port):
 
 def ensure_venv(root_dir):
     """Ensure a virtual environment exists and is used."""
-    # Check for both .venv and venv directories
-    venv_dir = root_dir / ".venv"
-    if not venv_dir.exists():
-        venv_dir = root_dir / "venv"
+    venv_dir = root_dir / "venv"
 
     # Platform-specific Python executable path
     if os.name == 'nt':  # Windows
@@ -75,7 +72,7 @@ def ensure_venv(root_dir):
     # Create venv if it doesn't exist
     if not venv_dir.exists():
         print_status("Creating virtual environment...", "yellow")
-        subprocess.run([sys.executable, "-m", "venv", ".venv"], cwd=root_dir, check=True)
+        subprocess.run([sys.executable, "-m", "venv", "venv"], cwd=root_dir, check=True)
 
         # Install requirements
         print_status("Installing backend dependencies...", "yellow")
@@ -83,11 +80,7 @@ def ensure_venv(root_dir):
 
     # Re-execute this script using the venv python
     print_status("Switching to virtual environment...", "cyan")
-    try:
-        os.execv(str(venv_python), [str(venv_python)] + sys.argv)
-    except Exception as e:
-        print_status(f"Failed to switch to virtual environment: {e}", "red")
-        print_status("Continuing with current Python...", "yellow")
+    os.execv(str(venv_python), [str(venv_python)] + sys.argv)
 
 def main():
     # Paths
@@ -105,6 +98,7 @@ def main():
     if not (frontend_dir / "node_modules").exists():
         print_status("Installing frontend dependencies...", "cyan")
         try:
+            # Use npm.cmd on Windows to ensure proper path resolution
             npm_cmd = "npm.cmd" if os.name == 'nt' else "npm"
             subprocess.run([npm_cmd, "install"], cwd=frontend_dir, check=True, shell=False)
         except subprocess.CalledProcessError as e:
@@ -116,13 +110,13 @@ def main():
     print_status("Starting Backend API...", "green")
     backend_env = os.environ.copy()
     # Ensure backend sees the venv
-    backend_env["VIRTUAL_ENV"] = str(root_dir / ".venv")
+    backend_env["VIRTUAL_ENV"] = str(root_dir / "venv")
 
     # Platform-specific PATH setup
     if os.name == 'nt':  # Windows
-        backend_env["PATH"] = f"{root_dir}/.venv/Scripts;{backend_env['PATH']}"
+        backend_env["PATH"] = f"{root_dir}/venv/Scripts;{backend_env['PATH']}"
     else:  # Unix/Linux/macOS
-        backend_env["PATH"] = f"{root_dir}/.venv/bin:{backend_env['PATH']}"
+        backend_env["PATH"] = f"{root_dir}/venv/bin:{backend_env['PATH']}"
     
     backend_process = subprocess.Popen(
         [sys.executable, "api_server.py"],
@@ -132,18 +126,26 @@ def main():
     
     # 4. Start Frontend
     print_status("Starting Frontend Dev Server...", "green")
-    # Use npm.cmd on Windows
+    # Use npm.cmd on Windows to ensure proper path resolution
     npm_cmd = "npm.cmd" if os.name == 'nt' else "npm"
-    try:
+
+    # On Windows, we need to inherit stdout/stderr to see the output
+    if os.name == 'nt':
         frontend_process = subprocess.Popen(
             [npm_cmd, "run", "dev"],
             cwd=frontend_dir,
             text=True,
             shell=False
         )
-    except Exception as e:
-        print_status(f"Failed to start frontend: {e}", "red")
-        return
+    else:
+        frontend_process = subprocess.Popen(
+            [npm_cmd, "run", "dev"],
+            cwd=frontend_dir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            shell=False
+        )
     
     # Wait a bit for servers to spin up
     time.sleep(3)
@@ -171,11 +173,15 @@ def main():
                 break
             if frontend_process.poll() is not None:
                 print_status("Frontend process exited unexpectedly.", "red")
+                # Print frontend output and error if it failed
+                if frontend_process.stdout:
+                    print("Frontend stdout:", frontend_process.stdout.read())
+                if frontend_process.stderr:
+                    print("Frontend stderr:", frontend_process.stderr.read())
                 break
     except KeyboardInterrupt:
         print_status("\nStopping system...", "yellow")
     finally:
-        print_status("Shutting down processes...", "yellow")
         backend_process.terminate()
         frontend_process.terminate()
         try:
